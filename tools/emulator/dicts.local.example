@@ -1,0 +1,4 @@
+# Copy to dicts.local (untracked): the .mdx/.mdd files 05-push-dicts.sh pushes, one per line.
+# ~/dictionaries/Example/Example.mdx
+# ~/dictionaries/Example/Example.mdd
+# ~/dictionaries/Example/Example.1.mdd

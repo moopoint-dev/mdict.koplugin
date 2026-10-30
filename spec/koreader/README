@@ -1,0 +1,4 @@
+Stubs for running KOReader's own widget code (ui/widget/htmlboxwidget.lua,
+scrollhtmlwidget.lua and their containers) outside KOReader, in
+spec/widget_spec.lua. Point KOREADER_FRONTEND at a KOReader checkout's
+frontend/ directory to enable that spec.

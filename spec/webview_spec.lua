@@ -1,0 +1,81 @@
+require("spec.helper")
+local json = require("mdict/json")
+local WebRenderer = require("renderers/webview")
+
+-- A scripted bridge: answers ops like the pager would, and asks for one resource during setEntry.
+local function fake_bridge()
+    local b = { queue = {}, provided = {}, calls = {} }
+    local function push(ev) b.queue[#b.queue + 1] = json.encode(ev) end
+    function b.session(_, fn) return fn() end
+    function b.open(_, slot) push({ ev = "opened", slot = slot }) end
+    function b.load(_, slot, base) b.base = base; push({ ev = "loaded", slot = slot }) end
+    function b.call(_, slot, id, op, args)
+        b.calls[#b.calls + 1] = op
+        local a = json.decode(args)
+        if op == "ping" then
+            push({ ev = "done", slot = slot, id = id, r = { w = 575, h = 550, dpr = 2 } })
+        elseif op == "setEntry" then
+            push({ ev = "done", slot = slot, id = 999, r = { stale = true } })
+            push({ ev = "need", slot = slot, rid = 5, path = "img/a.png" })
+            b.pending = { slot = slot, id = id, html = a.html }
+        elseif op == "showPage" then
+            push({ ev = "done", slot = slot, id = id, r = { page = a.page } })
+        else
+            push({ ev = "done", slot = slot, id = id, r = { error = "unknown op" } })
+        end
+    end
+    function b.provide(_, rid, path)
+        b.provided[rid] = path
+        local p = b.pending
+        push({ ev = "done", slot = p.slot, id = p.id, r = { pages = 3, vertical = false, anchorPage = -1 } })
+    end
+    function b.capture(_, slot, id, ptr) ptr[0] = 42; push({ ev = "captured", slot = slot, id = id, ok = true }) end
+    function b.poll() return table.remove(b.queue, 1) end
+    function b.closeAll() end
+    return b
+end
+
+describe("webview renderer", function()
+    it("loads a document, serves resources and renders pages", function()
+        local bridge = fake_bridge()
+        local wr = WebRenderer.new({ bridge = bridge,
+            resolve = function(dict, path) return "/cache/" .. dict .. "/" .. path end })
+        local slot = assert(wr:document({ dict_id = "dict1", cache_root = "/cache/dict1", stylesheets = {} }, 1150, 1100))
+        assert.equal("https://dict1.mdict.local/", bridge.base)
+        local r = assert(wr:setEntry(slot, { html = "<p>x</p>" }))
+        assert.equal(3, r.pages)
+        assert.equal("/cache/dict1/img/a.png", bridge.provided[5])
+        local buf = require("ffi").new("uint8_t[4]")
+        assert.is_true(wr:renderPage(slot, 1, buf))
+        assert.equal(42, buf[0])
+        local _, err = wr:op(slot.id, "nope")
+        assert.equal("unknown op", err)
+    end)
+
+    it("reuses a loaded document for the same dictionary", function()
+        local bridge = fake_bridge()
+        local wr = WebRenderer.new({ bridge = bridge })
+        local a = assert(wr:document({ dict_id = "a", cache_root = "/c", stylesheets = { "s.css" } }, 1150, 1100))
+        local loads = 0
+        local load = bridge.load
+        bridge.load = function(...) loads = loads + 1; return load(...) end
+        local b = assert(wr:document({ dict_id = "a", cache_root = "/c", stylesheets = { "s.css" } }, 1150, 1100))
+        assert.equal(a, b)
+        assert.equal(0, loads)
+        local c = assert(wr:document({ dict_id = "b", cache_root = "/c", stylesheets = {} }, 1150, 1100))
+        assert.are_not.equal(a.id, c.id)
+        assert.equal(1, loads)
+        -- a third dictionary evicts the least recently used slot
+        assert(wr:document({ dict_id = "c", cache_root = "/c", stylesheets = {} }, 1150, 1100))
+        assert.equal(2, loads)
+        assert.equal(2, #wr.slots)
+    end)
+
+    it("times out when the backend never answers", function()
+        local bridge = fake_bridge()
+        bridge.call = function() end
+        local wr = WebRenderer.new({ bridge = bridge })
+        local _, err = wr:op(1, "ping", {}, 0.05)
+        assert.equal("timeout", err)
+    end)
+end)

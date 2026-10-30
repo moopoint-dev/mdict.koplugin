@@ -1,0 +1,8 @@
+.sync/
+.devtools/
+__pycache__/
+*.pyc
+/build/
+/dist/
+.DS_Store
+tools/emulator/dicts.local

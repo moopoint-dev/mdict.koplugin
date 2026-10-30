@@ -1,0 +1,31 @@
+require("spec.helper")
+local json = require("mdict/json")
+
+describe("json", function()
+    it("round-trips values", function()
+        local v = { a = 1, b = { 1, 2.5, "x" }, c = "q\"\\\n\1é", d = true, e = false }
+        local back = json.decode(json.encode(v))
+        assert.same(v.b, { back.b[1], back.b[2], back.b[3] })
+        assert.equal(v.c, back.c)
+        assert.equal(1, back.a)
+        assert.is_true(back.d)
+        assert.is_false(back.e)
+    end)
+
+    it("decodes unicode escapes and null", function()
+        local v = json.decode('{"s":"\\u3042\\ud83d\\ude00","n":null,"a":[]}')
+        assert.equal("あ😀", v.s)
+        assert.equal(json.null, v.n)
+        assert.equal(0, #v.a)
+    end)
+
+    it("encodes empty arrays when asked", function()
+        assert.equal("[]", json.encode(json.array()))
+        assert.equal("{}", json.encode({}))
+    end)
+
+    it("rejects malformed input", function()
+        assert.has_error(function() json.decode('{"a":1') end)
+        assert.has_error(function() json.decode('[1,]x') end)
+    end)
+end)

@@ -1,0 +1,52 @@
+/* Page geometry for the MDict pager. --mdict-page-w/h are set by pager.js
+   from the viewport, which is exactly the popup's definition area. */
+:root { --mdict-page-w: 100vw; --mdict-page-h: 100vh; color-scheme: light only; }
+html, body {
+  margin: 0 !important; padding: 0 !important; border: 0 !important;
+  width: var(--mdict-page-w) !important; height: var(--mdict-page-h) !important;
+  overflow: hidden !important; background: #fff !important;
+  -webkit-text-size-adjust: none; text-size-adjust: none;
+}
+#mdict-pager {
+  position: absolute; left: 0; top: 0;
+  width: var(--mdict-page-w); height: var(--mdict-page-h);
+  overflow: hidden;
+}
+/* horizontal-tb: one column per page, columns side by side */
+#mdict-content {
+  box-sizing: border-box;
+  width: var(--mdict-page-w); height: var(--mdict-page-h);
+  column-width: var(--mdict-page-w); column-gap: 0; column-fill: auto;
+  writing-mode: horizontal-tb;
+  overflow: visible;
+}
+/* vertical-rl: one column per page, columns stacked top to bottom; lines run
+   top to bottom and the text advances right to left inside each page */
+body.mdict-vertical #mdict-content {
+  writing-mode: vertical-rl;
+  column-width: var(--mdict-page-h);
+}
+/* slices: one long strip, moved and clipped a page at a time by pager.js */
+body.mdict-slices #mdict-content { columns: auto; column-width: auto; height: auto; }
+body.mdict-slices.mdict-vertical #mdict-content { width: auto; height: var(--mdict-page-h); }
+#mdict-zoom { display: block; }
+/* pages are captured as still images */
+#mdict-zoom *, #mdict-zoom *::before, #mdict-zoom *::after {
+  transition: none !important; animation-duration: 0s !important; animation-delay: 0s !important;
+}
+img, svg, video, table, figure, .mdict-no-split { break-inside: avoid; }
+img { max-width: 100%; height: auto; }
+body.mdict-vertical img { max-height: 100%; width: auto; }
+
+/* Entry roots styled for a scrolling desktop window: let them fill the page.
+   (Rules for a particular exporter's markup belong in an mdict.koreader.css override.) */
+#mdict-zoom > * {
+  max-height: none !important; max-width: none !important;
+}
+
+/* eInk mode: solid black text, no tinted backgrounds, keep images. */
+body.mdict-eink #mdict-zoom, body.mdict-eink #mdict-zoom * {
+  color: #000 !important;
+  background-color: transparent !important;
+  text-shadow: none !important;
+}
