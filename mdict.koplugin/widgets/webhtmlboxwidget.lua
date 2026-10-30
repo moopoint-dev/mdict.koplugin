@@ -19,6 +19,9 @@ local WebHtmlBoxWidget = HtmlBoxWidget:extend{
     vertical = false,
     anchor_page = nil,
     page_cache_size = 3,
+    avoid_slots = nil, -- renderer slot ids not to use (the shown entry's, when laying out ahead)
+    label = nil, -- for the timing log
+    background = false, -- laid out ahead, by a background job
 }
 
 function WebHtmlBoxWidget:init()
@@ -39,17 +42,19 @@ function WebHtmlBoxWidget:loadEntry(doc, entry)
 end
 
 function WebHtmlBoxWidget:_layout()
-    local slot, err = self.renderer:document(self.doc, self.dimen.w, self.dimen.h)
+    local slot, err = self.renderer:document(self.doc, self.dimen.w, self.dimen.h, self.avoid_slots)
     if not slot then return nil, err end
     local info
     info, err = self.renderer:setEntry(slot, self.entry)
     if not info then return nil, err end
+    self.trace = self.trace or slot.trace
     slot.owner = self
     self.slot, self.slot_key = slot, slot.key
     self.page_count = math.max(1, info.pages or 1)
     self.vertical = info.vertical and true or false
     self.mode = info.mode -- "columns" or "slices"
     self.anchor_page = info.anchorPage and info.anchorPage >= 0 and info.anchorPage + 1 or nil
+    self.scripts = info.scripts -- the entry's scripts may want taps on links
     return true
 end
 
@@ -74,10 +79,14 @@ function WebHtmlBoxWidget:_pageBb(n)
     if bb then return bb end
     bb = Blitbuffer.new(self.dimen.w, self.dimen.h, Blitbuffer.TYPE_BBRGB32)
     local ok, err = self:_ensure()
-    if ok then ok, err = self.renderer:renderPage(self.slot, n - 1, bb.data) end
+    local timing
+    if ok then ok, err, timing = self.renderer:renderPage(self.slot, n - 1, bb.data) end
     if not ok then
         logger.warn("MDict: page render failed:", err)
         bb:fill(Blitbuffer.COLOR_WHITE)
+    elseif self.trace and not self.trace.logged then
+        self.trace.logged = true
+        logger.info(self:_timingText(timing))
     end
     self.page_cache[n] = bb
     self.page_order = self.page_order or {}
@@ -114,6 +123,41 @@ function WebHtmlBoxWidget:_render()
         end
         UIManager:scheduleIn(0.3, self._prefetch)
     end
+end
+
+local function marks(t)
+    if type(t) ~= "table" then return "" end
+    local keys = {}
+    for k, v in pairs(t) do
+        if k ~= "total" and type(v) == "number" and v > 0 then keys[#keys + 1] = k end
+    end
+    table.sort(keys)
+    local parts = {}
+    for _, k in ipairs(keys) do parts[#parts + 1] = k .. " " .. t[k] end
+    return #parts > 0 and " [" .. table.concat(parts, ", ") .. "]" or ""
+end
+
+-- One log line on where the time to show an entry went (milliseconds).
+function WebHtmlBoxWidget:_timingText(page)
+    local t = self.trace
+    local doc = {}
+    for _, k in ipairs({ "open", "load", "ping" }) do
+        if t[k] then doc[#doc + 1] = k .. " " .. t[k] end
+    end
+    local text = string.format("MDict: %s laid out in %d ms%s: document %d%s, entry %d%s",
+        self.label or "entry", t.total or 0, self.background and " (ahead)" or "",
+        t.doc or 0, #doc > 0 and " (" .. table.concat(doc, ", ") .. ")" or "",
+        t.entry or 0, marks(t.entry_js))
+    if t.needs then
+        text = text .. string.format(", %d resources in %.0f", t.needs, t.need_ms or 0)
+    end
+    if (t.layouts or 1) > 1 then text = text .. ", laid out twice" end
+    if page then
+        text = text .. string.format("; page 1 in %d (show %d, capture %d: waited %s %s, drew %s)",
+            page.show + page.capture, page.show, page.capture, tostring(page.wait), tostring(page.via),
+            tostring(page.draw))
+    end
+    return text
 end
 
 function WebHtmlBoxWidget:getSinglePageHeight()
@@ -165,6 +209,8 @@ function WebHtmlBoxWidget:onTapText(arg, ges)
                 end
                 return true
             end
+            -- a script of the entry may take the link over (a picture that opens a viewer)
+            if self.scripts and self:_tapEntry(pos, true) then return true end
             if self.html_link_tapped_callback then
                 self.html_link_tapped_callback(link)
                 return true
@@ -176,14 +222,16 @@ end
 
 -- A tap on something interactive in the entry (an expandable section): the
 -- pager activates it and lays the entry out again. Other taps turn pages.
-function WebHtmlBoxWidget:_tapEntry(pos)
+-- With link, the tap is on a link, and only taken when a script of the entry wants it.
+function WebHtmlBoxWidget:_tapEntry(pos, link)
     if not self:_ensure() then return end
     if self.slot.page ~= self.page_number - 1 then
         local r = self.renderer:op(self.slot.id, "showPage", { page = self.page_number - 1 })
         self.slot.page = r and r.page or nil
     end
-    local res = self.renderer:tap(self.slot, math.floor(pos.x), math.floor(pos.y))
+    local res = self.renderer:tap(self.slot, math.floor(pos.x), math.floor(pos.y), link)
     if not (res and res.handled) then return end
+    if res.same then return true end
     if res.path then
         self.entry.clicks = self.entry.clicks or {}
         table.insert(self.entry.clicks, res.path)

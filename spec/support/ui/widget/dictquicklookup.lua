@@ -4,11 +4,17 @@ DictQuickLookup.__index = DictQuickLookup
 
 function DictQuickLookup:new(o)
     o = setmetatable(o or {}, self)
-    o.dict_index = 1
-    o.definition_widget = {}
-    o:_instantiateScrollWidget()
+    if o.init then o:init() end
     return o
 end
+
+function DictQuickLookup:init()
+    self.dict_index = 1
+    self.definition_widget = {}
+    self:_instantiateScrollWidget()
+end
+
+function DictQuickLookup:onCloseWidget() self.closed = true end
 
 function DictQuickLookup:_instantiateScrollWidget()
     local r = self.results[self.dict_index]

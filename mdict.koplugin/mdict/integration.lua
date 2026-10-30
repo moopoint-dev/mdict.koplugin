@@ -282,6 +282,17 @@ function Integration.installWidgetHooks()
     local DictQuickLookup = require("ui/widget/dictquicklookup")
     local orig_instantiate = DictQuickLookup._instantiateScrollWidget
     local orig_update = DictQuickLookup.update
+    local orig_init = DictQuickLookup.init
+    local orig_close = DictQuickLookup.onCloseWidget
+
+    -- lays out the next MDict result while the reader looks at this one
+    local function prefetch(dql)
+        local p = Integration.state.prefetch
+        if p then
+            local ok, err = pcall(p, dql)
+            if not ok then require("logger").warn("MDict: prefetch failed:", err) end
+        end
+    end
 
     local function web_result(dql)
         local r = dql.results and dql.results[dql.dict_index]
@@ -313,7 +324,23 @@ function Integration.installWidgetHooks()
             dql.text_widget = nil
             dql.shw_widget, dql.stw_widget = nil, nil
         end
-        return orig_update(dql)
+        local a, b = orig_update(dql)
+        prefetch(dql)
+        return a, b
+    end
+
+    if orig_init then
+        DictQuickLookup.init = function(dql, ...)
+            local a, b = orig_init(dql, ...)
+            prefetch(dql)
+            return a, b
+        end
+    end
+
+    DictQuickLookup.onCloseWidget = function(dql, ...)
+        local drop = Integration.state.dropPrefetch
+        if drop then pcall(drop, dql) end
+        if orig_close then return orig_close(dql, ...) end
     end
 end
 

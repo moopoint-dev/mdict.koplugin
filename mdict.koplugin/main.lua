@@ -75,6 +75,8 @@ function MDict:init()
     state.settings = settings()
     state.renderer = function() return Manager.get(state) end
     state.widget = function(dql, r) return Manager.widget(state, dql, r) end
+    state.prefetch = function(dql) return Manager.prefetch(state, dql) end
+    state.dropPrefetch = function(dql) return Manager.dropPrefetch(dql) end
     state.playSound = function(dictionary, path)
         local ok, msg = Manager.playSound(state, dictionary, path)
         if not ok and msg then
@@ -111,6 +113,7 @@ function MDict.onIndexChange(job, event)
         UIManager:show(Notification:new{ text = text })
     end
     if event == "done" or event == "failed" then MDict.checkRebuilt() end
+    if package.loaded["widgets/dictlist"] then package.loaded["widgets/dictlist"].refresh(event) end
 end
 
 --- After "Rebuild indexes": says so once every dictionary is queued and the last build is done.
@@ -154,39 +157,6 @@ function MDict:rescan()
     MDict.prepareIndexes()
 end
 
-local function index_status_text()
-    local Indexer = require("mdict/indexer")
-    local lines = {}
-    local job, fraction = Indexer.status()
-    if job then
-        lines[#lines + 1] = T(_("Indexing %1: %2 %"), job.title or fs.basename(job.path), math.floor(fraction * 100))
-        lines[#lines + 1] = ""
-    end
-    local names = {
-        sidecar = _("ready (index)"),
-        ["file-order"] = _("ready (file order)"),
-        ["file-order (unverified)"] = _("ready, checking the key order"),
-        memory = _("ready (in memory)"),
-        indexing = _("indexing"),
-        ["index failed"] = _("index failed"),
-    }
-    for __, d in ipairs(state.library.dicts) do
-        local states = d:indexStates()
-        local s = states[1] and states[1].state
-        if not s then
-            local stored = d:storedIndexState()
-            s = stored and T(_("%1, not opened yet"), names[stored]) or _("not opened yet")
-        end
-        if d.error then s = d.error end
-        lines[#lines + 1] = T("%1: %2", d.title, names[s] or s)
-    end
-    for __, u in ipairs(state.library.unreadable or {}) do
-        lines[#lines + 1] = T(_("%1: cannot read (%2)"), fs.basename(u.path), u.error)
-    end
-    if #lines == 0 then return _("No MDict dictionaries found.") end
-    return table.concat(lines, "\n")
-end
-
 function MDict:addToMainMenu(menu_items)
     menu_items.mdict = {
         text = _("MDict dictionaries"),
@@ -203,12 +173,7 @@ function MDict:menuItems()
             end,
             keep_menu_open = true,
             callback = function()
-                local names = {}
-                for _, d in ipairs(state.library.dicts) do names[#names + 1] = "• " .. d.title end
-                UIManager:show(InfoMessage:new{
-                    text = #names > 0 and table.concat(names, "\n")
-                        or _("No MDict dictionaries found. Put .mdx files (with their .mdd files) in a dictionary folder."),
-                })
+                require("widgets/dictlist").show(state.library)
             end,
         },
         {
@@ -237,7 +202,7 @@ function MDict:menuItems()
             text = _("Index status"),
             keep_menu_open = true,
             callback = function()
-                UIManager:show(InfoMessage:new{ text = index_status_text() })
+                require("widgets/dictlist").show(state.library)
             end,
         },
         {
@@ -398,6 +363,16 @@ function MDict:displayItems()
             checked_func = function() return s.invert_vertical_swipes == true end,
             callback = function()
                 s.invert_vertical_swipes = not s.invert_vertical_swipes or nil
+                save_settings()
+            end,
+        },
+        {
+            text = _("Prepare the next result in advance"),
+            help_text = _("While you read a result in the dictionary popup, the next MDict result is laid out "
+                .. "in the background, so it shows at once. Turn off to save memory and battery."),
+            checked_func = function() return s.prefetch ~= false end,
+            callback = function()
+                if s.prefetch == false then s.prefetch = nil else s.prefetch = false end
                 save_settings()
             end,
         },

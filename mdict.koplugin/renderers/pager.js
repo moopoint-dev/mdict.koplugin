@@ -31,6 +31,8 @@
     mode: "columns",
     slices: null, // slices mode: page start offsets along the reading axis, plus the extent
     loadedScripts: {},
+    scripts: false, // a script of an entry ran in this document (its listeners stay)
+    overlays: [], // viewers scripts opened over the entry (see markOverlays)
   };
 
   function el(id) { return document.getElementById(id); }
@@ -60,7 +62,7 @@
   // Runs the entry's scripts in document order. innerHTML does not execute
   // them, so each one is re-created. External scripts run once per document.
   function runScripts(container, opts) {
-    var skip = opts.skipScripts || [];
+    var skip = Array.isArray(opts.skipScripts) ? opts.skipScripts : [];
     var scripts = Array.prototype.slice.call(container.querySelectorAll("script"));
     var chain = Promise.resolve();
     scripts.forEach(function (old) {
@@ -72,6 +74,7 @@
         if (skip.indexOf(name) >= 0) return;
         if (state.loadedScripts[src]) return;
         state.loadedScripts[src] = true;
+        state.scripts = true;
         chain = chain.then(function () {
           return withTimeout(new Promise(function (resolve) {
             var s = document.createElement("script");
@@ -82,6 +85,7 @@
         });
       } else {
         var code = old.textContent;
+        state.scripts = true;
         chain = chain.then(function () {
           try {
             var s = document.createElement("script");
@@ -318,6 +322,27 @@
       : "translateX(" + (-n * state.W) + "px)";
   }
 
+  // A viewer an entry's script opened over the entry (position: fixed), if one is shown.
+  // It covers the page, so while it is open the pages are not moved under it: a
+  // transformed ancestor would carry it off screen.
+  function openOverlay() {
+    var zoom = el("mdict-zoom"), list = state.overlays;
+    for (var i = list.length - 1; i >= 0; i--) {
+      var e = list[i];
+      if (!zoom.contains(e)) { list.splice(i, 1); continue; }
+      if (shown(e) && getComputedStyle(e).position === "fixed") return e;
+    }
+    return null;
+  }
+
+  function present() {
+    applyTransform(state.page);
+    if (openOverlay()) {
+      content().style.transform = "none";
+      content().style.clipPath = "";
+    }
+  }
+
   // Lays the entry out in the requested pagination mode ("auto" tries columns first).
   function layout(mode) {
     state.page = 0;
@@ -449,7 +474,10 @@
     return e || null;
   }
 
-  function activate(target, x, y) {
+  // Clicks target like a finger would. With guard, the click's default action
+  // (following a link) is cancelled after the entry's own listeners ran; returns
+  // whether one of them cancelled it, i.e. took the click over.
+  function activate(target, x, y, guard) {
     // pages are captured as still images: no animations
     if (window.jQuery && window.jQuery.fx) window.jQuery.fx.off = true;
     var hit = x === undefined ? null : document.elementFromPoint(x, y);
@@ -466,33 +494,91 @@
     }
     hit.dispatchEvent(new MouseEvent("mousedown", init));
     hit.dispatchEvent(new MouseEvent("mouseup", init));
-    hit.dispatchEvent(new MouseEvent("click", init));
+    var click = new MouseEvent("click", init), taken = null;
+    var keep = function (e) {
+      if (e !== click) return;
+      taken = e.defaultPrevented;
+      e.preventDefault();
+    };
+    if (guard) window.addEventListener("click", keep);
+    var notCancelled = hit.dispatchEvent(click);
+    if (guard) window.removeEventListener("click", keep);
+    return taken === null ? !notCancelled : taken;
+  }
+
+  // Watches the entry for changes. settle() resolves to whether it changed, once
+  // the changes stop; elements added meanwhile are pushed to `added`.
+  function watch(added) {
+    var zoom = el("mdict-zoom");
+    var changed = false, last = Date.now(), start = last;
+    var seen = function (records) {
+      if (!records.length) return;
+      changed = true;
+      last = Date.now();
+      if (!added) return;
+      for (var i = 0; i < records.length; i++) {
+        var nodes = records[i].addedNodes;
+        for (var j = 0; j < nodes.length; j++) if (nodes[j].nodeType === 1) added.push(nodes[j]);
+      }
+    };
+    var mo = new MutationObserver(seen);
+    mo.observe(zoom, { subtree: true, childList: true, attributes: true, characterData: true });
+    return {
+      cancel: function () { mo.disconnect(); },
+      settle: async function () {
+        await frame();
+        while (Date.now() - last < 60 && Date.now() - start < 600) await sleep(20);
+        seen(mo.takeRecords());
+        mo.disconnect();
+        return changed;
+      },
+    };
   }
 
   // Runs fn and resolves to true when it changed the entry, once the changes stop.
-  function watchChanges(fn) {
-    var zoom = el("mdict-zoom");
-    var changed = false, last = Date.now(), start = last;
-    var mo = new MutationObserver(function () { changed = true; last = Date.now(); });
-    mo.observe(zoom, { subtree: true, childList: true, attributes: true, characterData: true });
+  function watchChanges(fn, added) {
+    var w = watch(added);
     fn();
-    return (async function () {
-      await frame();
-      while (Date.now() - last < 60 && Date.now() - start < 600) await sleep(20);
-      mo.disconnect();
-      return changed;
-    })();
+    return w.settle();
   }
 
-  async function settleLayout(opts) {
+  // Elements a script added that sit over the page (an image viewer): kept so the
+  // pages stay put under them, and marked for e-ink mode to give them a background
+  // (again after each tap: scripts may rewrite their attributes).
+  function markOverlays(added) {
+    for (var i = 0; i < added.length; i++) {
+      var e = added[i];
+      if (e.isConnected && getComputedStyle(e).position === "fixed" && state.overlays.indexOf(e) < 0) {
+        state.overlays.push(e);
+      }
+    }
+    for (var j = 0; j < state.overlays.length; j++) state.overlays[j].setAttribute("data-mdict-overlay", "");
+  }
+
+  // Milliseconds spent in each step, reported with the result for the log.
+  function timer() {
+    var t0 = performance.now(), last = t0, out = {};
+    return {
+      mark: function (name) { var n = performance.now(); out[name] = Math.round(n - last); last = n; },
+      done: function () { out.total = Math.round(performance.now() - t0); return out; },
+    };
+  }
+
+  async function settleLayout(opts, t) {
     var zoom = el("mdict-zoom");
+    t = t || { mark: function () {} };
     unscroll(zoom);
+    t.mark("unscroll");
     await waitForImages(zoom, opts.imageTimeout || 1500);
+    t.mark("images");
     if (document.fonts && document.fonts.ready) {
       await withTimeout(document.fonts.ready, opts.fontTimeout || 2000);
     }
+    t.mark("fonts");
     await frame();
+    t.mark("frame");
     layout(state.pagination);
+    t.mark("layout");
   }
 
   var MDict = {};
@@ -501,6 +587,7 @@
     var opts;
     try { opts = arg(opId); } catch (e) { return fail(opId, e); }
     (async function () {
+      var t = timer();
       measureViewport();
       var body = document.body;
       var zoom = el("mdict-zoom");
@@ -512,13 +599,17 @@
       content().style.clipPath = "";
       zoom.style.zoom = String(opts.zoom || 1);
       zoom.innerHTML = opts.html || "";
+      state.overlays = [];
+      t.mark("html");
       await runScripts(zoom, opts);
+      t.mark("scripts");
       // sections the reader opened before (the entry is laid out again after a nested lookup)
       var clicks = opts.clicks || [];
       for (var i = 0; i < clicks.length; i++) {
-        var t = byPath(clicks[i]);
-        if (t) await watchChanges(function () { activate(t); });
+        var c = byPath(clicks[i]);
+        if (c) await watchChanges(function () { activate(c); });
       }
+      t.mark("clicks");
 
       var vertical = opts.writing === "vertical" ? true
         : opts.writing === "horizontal" ? false
@@ -526,10 +617,13 @@
       state.vertical = vertical;
       state.pagination = opts.pagination || "auto";
       body.classList.toggle("mdict-vertical", vertical);
-      await settleLayout(opts);
+      t.mark("writing");
+      await settleLayout(opts, t);
       var anchorPage = -1;
       if (opts.anchor) anchorPage = pageOfElement(findAnchor(opts.anchor));
+      t.mark("anchor");
       done(opId, { pages: state.pages, vertical: vertical, mode: state.mode, anchorPage: anchorPage,
+                   scripts: state.scripts, ms: t.done(),
                    width: Math.round(state.W * state.dpr), height: Math.round(state.H * state.dpr) });
     })().catch(function (e) { fail(opId, e); });
   };
@@ -538,45 +632,103 @@
     var n = arg(opId).page | 0;
     n = Math.max(0, Math.min(state.pages - 1, n));
     state.page = n;
-    applyTransform(n);
+    present();
     frame().then(frame).then(function () { done(opId, { page: n }); });
   };
 
   // A tap that is not on a link: activates expandable sections and the like.
   // When the entry changes it is laid out again, staying on the tapped
   // element's page. Taps that change nothing are left to KOReader.
+  // With link: a tap on a link, offered to the entry's scripts first. It is
+  // handled only when a script takes the click over (a picture link that opens
+  // a viewer); otherwise KOReader follows the link.
   MDict.tap = function (opId) {
     var a = arg(opId), d = state.dpr, x = a.x / d, y = a.y / d;
     var zoom = el("mdict-zoom");
     var hit = document.elementFromPoint(x, y);
-    var target = hit && zoom.contains(hit) ? clickTarget(hit) : null;
-    if (!target) return done(opId, { handled: false });
-    var path = pathOf(target);
-    var shown = state.page;
+    if (hit && !zoom.contains(hit)) hit = null;
+    var overlay = openOverlay();
+    var inOverlay = !!(hit && overlay && overlay.contains(hit));
+    var target;
+    if (a.link) target = hit && hit.closest("a[href]");
+    else target = hit && (clickTarget(hit) || (inOverlay ? hit : null));
+    if (!target || !zoom.contains(target)) {
+      // taps on a viewer stay in it
+      return done(opId, inOverlay ? { handled: true, same: true } : { handled: false });
+    }
+    // sections opened on the entry itself are opened again after a re-layout; viewers are not
+    var path = a.link || inOverlay ? null : pathOf(target);
+    var shownPage = state.page;
     (async function () {
-      var changed = await watchChanges(function () { activate(target, x, y); });
-      if (!changed) return done(opId, { handled: false });
-      await settleLayout({ imageTimeout: 1000 });
+      var t = timer(), added = [];
+      var w = watch(added);
+      var taken = activate(target, x, y, !!a.link);
+      if (a.link && !taken) {
+        w.cancel();
+        return done(opId, { handled: false });
+      }
+      var changed = await w.settle();
+      t.mark("watch");
+      // pages are still images: no focus rings on what a script focused
+      var focused = document.activeElement;
+      if (focused && focused !== document.body && focused.blur) focused.blur();
+      if (!changed) {
+        return done(opId, inOverlay || a.link ? { handled: true, same: true } : { handled: false });
+      }
+      markOverlays(added);
+      if (openOverlay()) {
+        // the entry under a viewer has not moved: keep its pages
+        state.page = shownPage;
+        present();
+        await frame();
+        await frame();
+        t.mark("frames");
+        return done(opId, { handled: true, pages: state.pages, page: state.page, mode: state.mode, ms: t.done() });
+      }
+      await settleLayout({ imageTimeout: 1000 }, t);
       var p = target.isConnected ? pageOfElement(target) : -1;
-      state.page = Math.max(0, Math.min(state.pages - 1, p >= 0 ? p : shown));
-      applyTransform(state.page);
-      done(opId, { handled: true, path: path, pages: state.pages, page: state.page, mode: state.mode });
+      state.page = Math.max(0, Math.min(state.pages - 1, p >= 0 ? p : shownPage));
+      present();
+      t.mark("page");
+      // drawn before KOReader captures it, as after showPage
+      await frame();
+      await frame();
+      t.mark("frames");
+      var res = { handled: true, pages: state.pages, page: state.page, mode: state.mode, ms: t.done() };
+      if (path) res.path = path;
+      done(opId, res);
     })().catch(function (e) { fail(opId, e); });
   };
 
-  // Links visible on the current page, with their raw href.
+  // The boxes a tap on a link can hit: its line boxes, and the boxes of pictures
+  // and blocks inside it, which can be much taller than its line.
+  function linkRects(a) {
+    var rects = Array.prototype.slice.call(a.getClientRects());
+    var inner = a.getElementsByTagName("*");
+    for (var i = 0; i < inner.length; i++) {
+      var e = inner[i];
+      if (!ATOMIC[e.tagName] && getComputedStyle(e).display === "inline") continue;
+      if (!shown(e)) continue;
+      rects = rects.concat(Array.prototype.slice.call(e.getClientRects()));
+    }
+    return rects;
+  }
+
+  // Links visible on the current page, with their raw href. While a viewer is
+  // open, only its own links.
   MDict.links = function (opId) {
     var out = [];
-    var anchors = el("mdict-zoom").querySelectorAll("a[href]");
+    var overlay = openOverlay();
+    var anchors = (overlay || el("mdict-zoom")).querySelectorAll("a[href]");
     for (var i = 0; i < anchors.length; i++) {
       var a = anchors[i];
       if (!isRealLink(a) || !shown(a)) continue; // script links are taps
-      var rects = a.getClientRects();
+      var rects = linkRects(a), text = null;
       for (var j = 0; j < rects.length; j++) {
         if (!visible(rects[j])) continue;
         var d = toDevice(rects[j]);
         d.uri = a.getAttribute("href");
-        d.text = linkText(a);
+        d.text = text === null ? (text = linkText(a)) : text;
         out.push(d);
       }
     }

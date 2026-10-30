@@ -30,6 +30,7 @@ describe("menus", function()
         package.loaded["mdict/indexer"] = { status = function() return nil end }
         package.loaded["ui/widget/confirmbox"] = { new = function(_, o) return o end }
         package.loaded["ui/widget/notification"] = { new = function(_, o) return o end }
+        package.loaded["ui/widget/menu"] = { new = function(_, o) return o end, onCloseWidget = function() end }
         package.loaded["datastorage"] = { getDataDir = function() return helper.tmpdir("menu-data") end }
         package.loaded["fontlist"] = {
             fontinfo = {
@@ -86,16 +87,55 @@ describe("menus", function()
         assert.equal("slices", Manager.dictSetting(store.mdict, d.id, "pagination", "auto"))
         find(find(per, "Writing direction").sub_item_table, "Automatic").callback()
         assert.equal("auto", Manager.dictSetting(store.mdict, d.id, "writing", "auto"))
-        -- the index status text lists every dictionary, and the files that could not be read
+        -- the dictionary list has a row per dictionary with its index state, and the files
+        -- that could not be read; a row opens the dictionary's details
         local UIManager = require("ui/uimanager")
         local show = UIManager.show
-        local shown
-        UIManager.show = function(_, w) shown = w end
+        local shown = {}
+        UIManager.show = function(_, w) shown[#shown + 1] = w end
         lib.unreadable = { { path = "/dicts/broken.mdx", error = "bad header" } }
         find(plugin:menuItems(), "Index status").callback()
+        local list = shown[1]
+        assert.equal("MDict dictionaries (" .. #lib.dicts .. ")", list.title)
+        local row = find(list.item_table, "Basic Test")
+        assert.truthy(row.mandatory)
+        local last = list.item_table[#list.item_table]
+        assert.equal("broken.mdx", last.text)
+        assert.equal("cannot read", last.mandatory)
+        row.callback()
         UIManager.show = show
-        assert.truthy(shown.text:find("Basic Test: ", 1, true))
-        assert.truthy(shown.text:find("broken.mdx: cannot read (bad header)", 1, true))
+        assert.truthy(shown[2].text:find("Basic Test\n", 1, true))
+        assert.truthy(shown[2].text:find("File: basic.mdx", 1, true))
+        assert.truthy(shown[2].text:find("Resource files: ", 1, true))
+        -- the list follows index builds while it is shown
+        local DictList = require("widgets/dictlist")
+        local switched
+        list.switchItemTable = function(_, t, rows) switched = { title = t, items = rows } end
+        MDict.onIndexChange({ path = "/x.mdx", title = "X" }, "done")
+        assert.equal(list.title, switched.title)
+        assert.equal(#list.item_table, #switched.items)
+        DictList.shown = nil
+    end)
+
+    it("describes index states in the dictionary list", function()
+        local DictList = require("widgets/dictlist")
+        local Indexer = package.loaded["mdict/indexer"]
+        local d = { path = "/d/a.mdx", title = "A", indexStates = function() return {} end,
+            storedIndexState = function() return nil end }
+        assert.equal("not opened", (DictList.status(d)))
+        Indexer.queue = { { path = "/d/a.mdx" } }
+        assert.equal("waiting", (DictList.status(d)))
+        Indexer.queue = nil
+        d.storedIndexState = function() return "sidecar" end
+        assert.equal("ready", (DictList.status(d)))
+        d.indexStates = function() return { { state = "file-order (unverified)" } } end
+        assert.equal("checking", (DictList.status(d)))
+        local status = Indexer.status
+        Indexer.status = function() return { path = "/d/a.mdx" }, 0.42 end
+        assert.equal("indexing 42 %", (DictList.status(d)))
+        Indexer.status = status
+        d.error = "bad header"
+        assert.equal("error", (DictList.status(d)))
     end)
 
     it("says when a rebuild of all indexes is done", function()

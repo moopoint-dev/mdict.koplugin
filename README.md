@@ -40,12 +40,16 @@ note; a notification says when an index you were waiting for is ready.
 
 - **Display**: render with the WebView or KOReader's renderer, text size,
   e-ink mode (black text, no tinted backgrounds), your own font for all text,
-  Latin text only, or Japanese/Chinese text only, and reversed swipes for
-  vertical text.
+  Latin text only, or Japanese/Chinese text only, reversed swipes for
+  vertical text, and preparing the next result in advance (on by default: while
+  you read one result, the next MDict result is laid out in the background).
 - **Dictionary settings**: per dictionary, the writing direction (automatic,
   horizontal, vertical) and page layout (columns, or slices for layouts that
   columns cut off; automatic switches when needed).
-- **Index status**, **Rebuild indexes**, **Clear extracted resources**, **Rescan**.
+- **Dictionaries found** (or **Index status**): a full-screen list of the dictionaries,
+  sorted by name, with the state of each one's index; tap one for its file, size,
+  resource files and override files.
+- **Rebuild indexes**, **Clear extracted resources**, **Rescan**.
 
 Override files, for fixes a dictionary's own CSS or markup needs on an e-reader:
 

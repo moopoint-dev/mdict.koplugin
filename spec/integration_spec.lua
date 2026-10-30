@@ -128,4 +128,20 @@ describe("integration", function()
         assert.equal(2, made)
         Integration.state.widget = nil
     end)
+
+    it("asks for the next result to be laid out ahead, and drops it on close", function()
+        local seen, dropped = {}, 0
+        Integration.state.widget = function(_, r) return { kind = "web", html = r.mdict.html, free = function() end } end
+        Integration.state.prefetch = function(d) seen[#seen + 1] = d.dict_index end
+        Integration.state.dropPrefetch = function() dropped = dropped + 1 end
+        local results = rd:startSdcv("apples", rd.enabled_dict_names, false)
+        local dql = DictQuickLookup:new({ results = results })
+        assert.same({ 1 }, seen)
+        dql:changeDictionary(2)
+        assert.same({ 1, 2 }, seen)
+        dql:onCloseWidget()
+        assert.equal(1, dropped)
+        assert.is_true(dql.closed)
+        Integration.state.widget, Integration.state.prefetch, Integration.state.dropPrefetch = nil, nil, nil
+    end)
 end)

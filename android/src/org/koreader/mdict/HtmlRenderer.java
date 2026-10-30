@@ -10,6 +10,7 @@ import android.media.MediaPlayer;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
@@ -61,6 +62,10 @@ public final class HtmlRenderer {
     private static final String HOST_SUFFIX = ".mdict.local";
     private static final int NEED_TIMEOUT_MS = 4000;
     private static final int VISUAL_STATE_TIMEOUT_MS = 400;
+    // Once visual state callbacks are known not to come (the WebView has zero alpha
+    // and some systems never draw it), captures wait this long instead.
+    private static final int SETTLE_MS = 50;
+    private static final int STATE_TRIES = 2;
 
     private final Activity activity;
     private final Handler ui;
@@ -69,6 +74,11 @@ public final class HtmlRenderer {
             new ConcurrentHashMap<Integer, ArrayBlockingQueue<String>>();
     private final AtomicInteger nextRid = new AtomicInteger(1);
     private final Map<Integer, Slot> slots = new ConcurrentHashMap<Integer, Slot>();
+    // visual state callbacks seen and missed (UI thread only)
+    private int stateSeen = 0, stateMissed = 0;
+    // bitmaps shared by all slots, by size (pages of horizontal and of vertical entries
+    // differ by the scroll bar): captures run one at a time on the UI thread (UI thread only)
+    private final Map<Long, Bitmap> bitmaps = new HashMap<Long, Bitmap>();
 
     private final class Slot {
         final int id;
@@ -77,7 +87,6 @@ public final class HtmlRenderer {
         volatile File cacheRoot;
         volatile Map<String, File> files = new HashMap<String, File>();
         final ConcurrentHashMap<Integer, String> args = new ConcurrentHashMap<Integer, String>();
-        Bitmap bitmap;
 
         Slot(int id) { this.id = id; }
     }
@@ -247,22 +256,32 @@ public final class HtmlRenderer {
         ui.post(new Runnable() {
             @Override public void run() {
                 final Slot s = slots.get(slot);
-                if (s == null) { emitCaptured(slot, id, false); return; }
+                if (s == null) { emitCaptured(slot, id, false, 0, 0, "none"); return; }
+                final long start = SystemClock.uptimeMillis();
                 final boolean[] fired = {false};
-                final Runnable draw = new Runnable() {
+                final class Draw implements Runnable {
+                    final String via;
+                    Draw(String via) { this.via = via; }
                     @Override public void run() {
                         if (fired[0]) return;
                         fired[0] = true;
-                        emitCaptured(slot, id, drawInto(s, dst, width, height));
+                        if (via.equals("state")) stateSeen++;
+                        else if (via.equals("timeout")) stateMissed++;
+                        long t = SystemClock.uptimeMillis();
+                        boolean ok = drawInto(s, dst, width, height);
+                        long done = SystemClock.uptimeMillis();
+                        emitCaptured(slot, id, ok, t - start, done - t, via);
                     }
-                };
-                if (Build.VERSION.SDK_INT >= 23) {
+                }
+                boolean useState = Build.VERSION.SDK_INT >= 23 && (stateSeen > 0 || stateMissed < STATE_TRIES);
+                if (useState) {
+                    final Draw onState = new Draw("state");
                     s.view.postVisualStateCallback(id, new WebView.VisualStateCallback() {
-                        @Override public void onComplete(long requestId) { draw.run(); }
+                        @Override public void onComplete(long requestId) { onState.run(); }
                     });
-                    ui.postDelayed(draw, VISUAL_STATE_TIMEOUT_MS);
+                    ui.postDelayed(new Draw("timeout"), VISUAL_STATE_TIMEOUT_MS);
                 } else {
-                    ui.postDelayed(draw, 50);
+                    ui.postDelayed(new Draw("settle"), SETTLE_MS);
                 }
             }
         });
@@ -271,15 +290,21 @@ public final class HtmlRenderer {
     private boolean drawInto(Slot s, ByteBuffer dst, int width, int height) {
         try {
             if (s.view.getWidth() != width || s.view.getHeight() != height) layout(s.view, width, height);
-            if (s.bitmap == null || s.bitmap.getWidth() != width || s.bitmap.getHeight() != height) {
-                if (s.bitmap != null) s.bitmap.recycle();
-                s.bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+            Long size = ((long) width << 32) | height;
+            Bitmap bitmap = bitmaps.get(size);
+            if (bitmap == null) {
+                if (bitmaps.size() >= 2) {
+                    for (Bitmap b : bitmaps.values()) b.recycle();
+                    bitmaps.clear();
+                }
+                bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+                bitmaps.put(size, bitmap);
             }
-            s.bitmap.eraseColor(Color.WHITE);
-            Canvas c = new Canvas(s.bitmap);
+            bitmap.eraseColor(Color.WHITE);
+            Canvas c = new Canvas(bitmap);
             s.view.draw(c);
             dst.rewind();
-            s.bitmap.copyPixelsToBuffer(dst);
+            bitmap.copyPixelsToBuffer(dst);
             return true;
         } catch (Throwable t) {
             emitError(s.id, t);
@@ -287,8 +312,10 @@ public final class HtmlRenderer {
         }
     }
 
-    private void emitCaptured(int slot, int id, boolean ok) {
-        emit("{\"ev\":\"captured\",\"slot\":" + slot + ",\"id\":" + id + ",\"ok\":" + ok + "}");
+    private void emitCaptured(int slot, int id, boolean ok, long waitMs, long drawMs, String via) {
+        Log.d(TAG, "capture " + id + ": waited " + waitMs + " ms (" + via + "), drew in " + drawMs + " ms");
+        emit("{\"ev\":\"captured\",\"slot\":" + slot + ",\"id\":" + id + ",\"ok\":" + ok
+                + ",\"wait\":" + waitMs + ",\"draw\":" + drawMs + ",\"via\":\"" + via + "\"}");
     }
 
     /** Answers a "need" event: the file now in the cache, or null/empty if there is none. */
@@ -313,7 +340,10 @@ public final class HtmlRenderer {
                 } catch (Throwable t) {
                     Log.e(TAG, "close", t);
                 }
-                if (s.bitmap != null) s.bitmap.recycle();
+                if (slots.isEmpty()) {
+                    for (Bitmap b : bitmaps.values()) b.recycle();
+                    bitmaps.clear();
+                }
             }
         });
     }

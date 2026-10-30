@@ -7,10 +7,12 @@
  *        [--writing auto|horizontal|vertical] [--font kind=Name]... [--find term]
  *        [--anchor id] [--max-pages N] [--pagination auto|columns|slices]
  *        [--tap-selector css] [--user-font file[:all|latin|cjk]] [--skip-script name.js]...
- *        entry.html...
+ *        [--cpu-slowdown N] entry.html...
  *
  * --tap-selector taps the first matching element on page 1 (e.g. an
  * expandable section's summary) and saves the pages again as *-tap-pN.png.
+ *
+ * --cpu-slowdown throttles the page's CPU N times, roughly like a slow e-reader.
  *
  * Prints one JSON line per entry with the pager results.
  */
@@ -40,6 +42,7 @@ for (let i = 2; i < process.argv.length; i++) {
   else if (a === "--tap-selector") opts.tapSelector = next();
   else if (a === "--user-font") opts.userFont = next();
   else if (a === "--skip-script") opts.skipScripts.push(next());
+  else if (a === "--cpu-slowdown") opts.cpuSlowdown = +next();
   else opts.entries.push(a);
 }
 
@@ -79,6 +82,10 @@ const types = { css: "text/css", js: "text/javascript", png: "image/png", jpg: "
         done(id, json) { this._res[id] = json; },
       };
     });
+    if (opts.cpuSlowdown > 1) {
+      const cdp = await context.newCDPSession(page);
+      await cdp.send("Emulation.setCPUThrottlingRate", { rate: opts.cpuSlowdown });
+    }
     await page.goto("https://test.mdict.local/__pager__.html");
     let seq = 0;
     const op = async (name, a) => {
@@ -119,7 +126,9 @@ const types = { css: "text/css", js: "text/javascript", png: "image/png", jpg: "
         return r && { x: r.left + Math.min(r.width / 2, 20), y: r.top + r.height / 2 };
       }, opts.tapSelector);
       if (at) {
+        const t1 = Date.now();
         res.tap = await op("tap", { x: Math.round(at.x * opts.dpr), y: Math.round(at.y * opts.dpr) });
+        res.tapMs = Date.now() - t1;
         const m = Math.min((res.tap && res.tap.pages) || 1, opts.maxPages);
         for (let p = 0; p < m; p++) {
           await op("showPage", { page: p });

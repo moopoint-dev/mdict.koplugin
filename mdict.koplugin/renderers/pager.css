@@ -50,3 +50,5 @@ body.mdict-eink #mdict-zoom, body.mdict-eink #mdict-zoom * {
   background-color: transparent !important;
   text-shadow: none !important;
 }
+/* a viewer a script opened over the page (see pager.js) hides the page */
+body.mdict-eink #mdict-zoom [data-mdict-overlay] { background-color: #fff !important; }

@@ -57,6 +57,9 @@ local WebScrollWidget = ScrollHtmlWidget:extend{
     invert_vertical_swipes = false,
     vertical_hint = false, -- lay out for vertical text first (the dictionary's last entry was vertical)
     on_layout = nil, -- called with the box once the entry is laid out
+    avoid_slots = nil, -- renderer slots not to use (see WebHtmlBoxWidget)
+    label = nil, -- names the entry in the timing log
+    background = false, -- laid out ahead by a background job
 }
 
 local function new_box(o, vertical)
@@ -72,6 +75,9 @@ local function new_box(o, vertical)
         highlight_text_selection = o.highlight_text_selection,
         html_link_tapped_callback = o.html_link_tapped_callback,
         on_clear_search = o.on_clear_search,
+        avoid_slots = o.avoid_slots,
+        label = o.label,
+        background = o.background,
     }
 end
 
@@ -79,9 +85,12 @@ end
 -- The scroll bar sits beside horizontal text and below vertical text, so the page size depends
 -- on the writing mode: the entry is laid out for vertical_hint, and again when that was wrong.
 function WebScrollWidget.create(o)
+    local clock = require("renderers/webview").clock
+    local t0 = clock()
     local hint = o.vertical_hint and true or false
     local box = new_box(o, hint)
     local ok, err = box:loadEntry(o.doc, o.entry)
+    local twice = false
     if ok and box.vertical ~= hint then
         box:free()
         local entry = {}
@@ -89,11 +98,15 @@ function WebScrollWidget.create(o)
         entry.writing = hint and "horizontal" or "vertical"
         box = new_box(o, not hint)
         ok, err = box:loadEntry(o.doc, entry)
+        twice = true
     end
     if not ok then
         box:free()
         return nil, err
     end
+    box.trace = box.trace or {}
+    box.trace.total = math.floor((clock() - t0) * 1000 + 0.5)
+    if twice then box.trace.layouts = 2 end
     if o.on_layout then o.on_layout(box) end
     o.htmlbox_widget = box
     return WebScrollWidget:new(o)

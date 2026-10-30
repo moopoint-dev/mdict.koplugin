@@ -194,6 +194,55 @@ describe("WebView widgets", function()
         w:free()
     end)
 
+    it("lays out entries that load scripts from the dictionary", function()
+        local w = widget_for('<script src="js/viewer.js"></script><p>an entry with a script file</p>')
+        local box = w.htmlbox_widget
+        assert.is_true(box.scripts)
+        assert.equal(1, box.page_count)
+        assert.is_true(box:findText("script file"))
+        w:free()
+    end)
+
+    it("lets the entry's scripts take a picture link over", function()
+        -- a viewer like the ones exporters add: a click on the picture opens it over the entry
+        local viewer = 'document.addEventListener("click", function (e) {'
+            .. ' var a = e.target.closest && e.target.closest("a.pic"); if (!a) return;'
+            .. ' var v = document.createElement("div"); v.className = "viewer";'
+            .. ' v.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;background:#000";'
+            .. ' var b = document.createElement("button"); b.textContent = "close";'
+            .. ' b.onclick = function () { v.parentNode.removeChild(v); };'
+            .. ' v.appendChild(b); a.parentNode.appendChild(v); e.preventDefault(); e.stopPropagation(); }, true);'
+        local html = '<p>words before the picture</p><p><a href="entry://picture" class="pic">'
+            .. '<img src="img/icon.png" style="width:160px;height:120px"></a></p>'
+            .. '<p>see <a href="entry://other">other</a></p><script>' .. viewer .. "</script>"
+        local w = widget_for(html)
+        local box = w.htmlbox_widget
+        box.dimen.x, box.dimen.y = 0, 0
+        assert.is_true(box.scripts)
+        -- the picture is part of its link, not only the line under it
+        local pic
+        for _, l in ipairs(box:_links()) do
+            if l.uri == "entry://picture" and l.y1 - l.y0 >= 100 then pic = l end
+        end
+        assert.truthy(pic)
+        local tapped = #links_tapped
+        local center = Geom:new{ x = (pic.x0 + pic.x1) / 2, y = (pic.y0 + pic.y1) / 2 }
+        assert.is_true(box:onTapText(nil, { pos = center }))
+        assert.equal(tapped, #links_tapped)
+        assert.is_nil(box.entry.clicks)
+        -- while the viewer is open, its taps stay in it and the entry's links are covered
+        assert.same({}, box:_links())
+        local next_result = dialog.next_result
+        assert.is_true(box:onTapText(nil, { pos = Geom:new{ x = 300, y = 300 } }))
+        assert.equal(next_result, dialog.next_result)
+        assert.is_true(box:onTapText(nil, { pos = text_center(box, "close") }))
+        assert.is_true(#box:_links() >= 2)
+        -- links the scripts leave alone are followed as before
+        box:onTapText(nil, { pos = text_center(box, "other") })
+        assert.equal("entry://other", links_tapped[#links_tapped].uri)
+        w:free()
+    end)
+
     it("pages boxes columns cannot split as slices", function()
         local tall = '<div style="display:inline-block;width:100%">'
             .. string.rep("<p>a line in a box that cannot be split into columns</p>", 80) .. "</div>"
@@ -262,6 +311,100 @@ describe("WebView widgets", function()
         -- the query footer KOReader appends is part of the entry
         assert.is_true(box:findText("query"))
         w:free()
+        Manager.shutdown()
+    end)
+
+    it("lays out the next result ahead and hands it over when the reader gets there", function()
+        local Manager = require("renderers/manager")
+        local Library = require("mdict/library")
+        local lib = Library.new({ dirs = { helper.fixtures() }, cache_dir = helper.tmpdir("plib") })
+        lib:scan()
+        local d = lib:byTitle("Basic Test")
+        local state = { library = lib, settings = {} }
+        local apple = Lookup.run({ d }, { "Apple" })[1]
+        local long = Lookup.run({ d }, { "long" })[1]
+        local split = Lookup.run({ d }, { "split" })[1]
+        local dql = {
+            results = { { dict = "Other", definition = "plain" }, apple, long, split },
+            dict_index = 1, definition = "plain", word = "Apple",
+            dict_font_size = 20, content_width = 600, definition_height = 300,
+            html_dictionary_link_tapped_callback = function() end,
+        }
+        -- runs the scheduler (a background job's steps) for up to 10 s, until p's job is done
+        local clock = WebRenderer.clock
+        local function settle(p)
+            local deadline = clock() + 10
+            while clock() < deadline do
+                if p.widget or p.job == nil or p.job.done then return end
+                UIManager:runTasks()
+                require("ffi").C.poll(nil, 0, 2)
+            end
+        end
+        -- a plain result is shown: the MDict one after it is laid out in the background
+        UIManager.tasks = {}
+        Manager.prefetch(state, dql)
+        local p = assert(dql.mdict_prefetch)
+        assert.equal(2, p.index)
+        assert.is_falsy(p.job.done) -- nothing happens before the scheduler runs it
+        local job = p.job
+        settle(p)
+        local ahead = assert(p.widget, tostring(job.ok) .. " " .. tostring(job.err))
+        local box = ahead.htmlbox_widget
+        assert.truthy(box.page_cache[box.page_number]) -- its first page is drawn already
+        assert.is_true(box.slot.held)
+        assert.is_true(box.trace.logged)
+        -- not the shown result's footer: only the first result gets KOReader's query footer
+        assert.is_false(box:findText("query"))
+
+        -- the reader moves on to it: the widget laid out ahead is used as it is
+        dql.dict_index, dql.definition = 2, apple.definition
+        local w = Manager.widget(state, dql, apple)
+        assert.equal(ahead, w)
+        assert.is_nil(dql.mdict_prefetch)
+        assert.is_nil(box.slot.held)
+        dql.mdict_widget = w
+
+        -- and the next one is laid out in another slot, leaving the shown entry's alone
+        Manager.prefetch(state, dql)
+        local p2 = assert(dql.mdict_prefetch)
+        assert.equal(3, p2.index)
+        settle(p2)
+        local box2 = assert(p2.widget).htmlbox_widget
+        assert.are_not.equal(box.slot.id, box2.slot.id)
+        assert.equal(box, box.slot.owner)
+        assert.truthy(box:_pageBb(1))
+
+        -- a result wanted before its background layout is done is finished at once
+        dql.dict_index, dql.definition = 3, long.definition
+        local w2 = Manager.widget(state, dql, long)
+        assert.equal(p2.widget, w2)
+        dql.mdict_widget = w2
+        w:free()
+        Manager.prefetch(state, dql)
+        local p3 = assert(dql.mdict_prefetch)
+        assert.equal(4, p3.index)
+        dql.dict_index, dql.definition = 4, split.definition
+        assert.is_falsy(p3.widget)
+        local w3 = assert(Manager.widget(state, dql, split))
+        assert.equal(p3.widget, w3)
+        assert.truthy(w3.htmlbox_widget.page_cache[1])
+
+        -- going back: the previous result is the one laid out next; closing drops it
+        dql.mdict_widget = w3
+        w2:free()
+        Manager.prefetch(state, dql)
+        dql.dict_index = 3
+        Manager.prefetch(state, dql)
+        assert.equal(2, dql.mdict_prefetch.index)
+        Manager.dropPrefetch(dql)
+        assert.is_nil(dql.mdict_prefetch)
+        local deadline = clock() + 10
+        while #UIManager.tasks > 0 and clock() < deadline do
+            UIManager:runTasks()
+            require("ffi").C.poll(nil, 0, 2)
+        end
+        assert.equal(0, #UIManager.tasks)
+        w3:free()
         Manager.shutdown()
     end)
 end)

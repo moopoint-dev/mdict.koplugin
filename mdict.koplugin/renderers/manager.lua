@@ -48,6 +48,7 @@ function Manager.get(state)
         return nil
     end
     local WebRenderer = require("renderers/webview")
+    local UIManager = require("ui/uimanager")
     Manager.renderer = WebRenderer.new({
         bridge = bridge,
         logger = logger,
@@ -55,6 +56,8 @@ function Manager.get(state)
             local d = state.library and state.library:byId(dict_id)
             return d and d:resource(path)
         end,
+        schedule = function(seconds, fn) UIManager:scheduleIn(seconds, fn) end,
+        unschedule = function(fn) UIManager:unschedule(fn) end,
     })
     return Manager.renderer
 end
@@ -120,9 +123,10 @@ end
 
 --- Text KOReader appended to a result's definition (the "(query : word)" footer).
 -- Left out when the query was an internal key (a followed cross reference).
-local function appended(dql, r)
+-- shown: the definition KOReader shows (default: the popup's current one).
+local function appended(dql, r, shown)
     if type(dql.word) == "string" and require("mdict/lookup").isInternalKey(dql.word) then return "" end
-    local def, base = dql.definition, r.definition
+    local def, base = shown or dql.definition, r.definition
     if type(def) == "string" and type(base) == "string" and #def > #base and def:sub(1, #base) == base then
         return def:sub(#base + 1)
     end
@@ -165,8 +169,29 @@ function Manager.dictSetting(settings, dict_id, key, default)
     return default
 end
 
+-- Whether a dictionary's entries were vertical last time (remembered across sessions,
+-- so its first entry is laid out once, for the right page shape).
+local function vertical_seen(settings, id)
+    local v = Manager.vertical_seen[id]
+    if v == nil and settings.vertical_seen then v = settings.vertical_seen[id] end
+    return v
+end
+
+local function remember_vertical(settings, id, vertical)
+    Manager.vertical_seen[id] = vertical
+    settings.vertical_seen = settings.vertical_seen or {}
+    if settings.vertical_seen[id] ~= vertical then settings.vertical_seen[id] = vertical end
+end
+
 --- A WebScrollWidget for an MDict result in a DictQuickLookup, or nil to use MuPDF.
-function Manager.widget(state, dql, r)
+-- opts (for laying out a result ahead): definition (the result's own, instead of the shown
+-- one's), avoid (renderer slot ids to leave alone), background (in a background job).
+function Manager.widget(state, dql, r, opts)
+    if not opts then
+        local ready = Manager.takePrefetched(dql, r)
+        if ready then return ready end
+    end
+    opts = opts or {}
     local renderer = Manager.get(state)
     if not renderer then return nil end
     local d = state.library:byId(r.mdict.id)
@@ -176,7 +201,7 @@ function Manager.widget(state, dql, r)
     if not (user_font and user_font.file and user_font.scope) then user_font = nil end
     local writing = Manager.dictSetting(settings, d.id, "writing", "auto")
     local vertical_hint = writing == "vertical"
-    if writing == "auto" then vertical_hint = Manager.vertical_seen[d.id] or false end
+    if writing == "auto" then vertical_hint = vertical_seen(settings, d.id) or false end
     local stylesheets, body = d:stylesheetsOf(r.mdict.html)
     local Device = require("device")
     local eink = settings.eink
@@ -196,7 +221,7 @@ function Manager.widget(state, dql, r)
             user_css = d:userCss(),
         },
         entry = {
-            html = body .. '<div class="mdict-query">' .. appended(dql, r) .. "</div>",
+            html = body .. '<div class="mdict-query">' .. appended(dql, r, opts.definition) .. "</div>",
             anchor = r.mdict.anchor,
             zoom = ((dql.dict_font_size or 20) / 20) * (settings.zoom or 1),
             eink = eink,
@@ -204,7 +229,10 @@ function Manager.widget(state, dql, r)
             pagination = Manager.dictSetting(settings, d.id, "pagination", "auto"),
         },
         vertical_hint = vertical_hint,
-        on_layout = function(box) Manager.vertical_seen[d.id] = box.vertical end,
+        on_layout = function(box) remember_vertical(settings, d.id, box.vertical) end,
+        avoid_slots = opts.avoid,
+        label = d.title,
+        background = opts.background,
         width = dql.content_width,
         height = dql.definition_height,
         dialog = dql,
@@ -221,6 +249,7 @@ function Manager.widget(state, dql, r)
     logger.dbg("MDict: laid out", r.mdict.key, string.format("in %.0f ms", (clock() - t0) * 1000),
         widget and widget.htmlbox_widget.page_count or 0, "pages")
     if not widget then
+        if opts.background then return nil, err end
         logger.warn("MDict: WebView could not show the entry:", err)
         if err == "timeout" or (err and err:find("^open")) or (err and err:find("^load")) then
             Manager.disable(err)
@@ -228,6 +257,86 @@ function Manager.widget(state, dql, r)
         return nil
     end
     return widget
+end
+
+-- laying out the next result ahead ------------------------------------------------
+
+Manager.PREFETCH_DELAY = 0.3 -- seconds after a result is shown
+
+--- Frees the result laid out ahead for a popup, and stops laying it out.
+function Manager.dropPrefetch(dql)
+    local p = dql.mdict_prefetch
+    if not p then return end
+    dql.mdict_prefetch = nil
+    p.dropped = true
+    if p.job and not p.job.done and Manager.renderer then Manager.renderer:cancelJob(p.job) end
+    if p.widget then
+        local box = p.widget.htmlbox_widget
+        if box and box.slot then box.slot.held = nil end
+        p.widget:free()
+        p.widget = nil
+    end
+end
+
+--- The widget laid out ahead for result r, if it is the one (finishing it first if needed).
+function Manager.takePrefetched(dql, r)
+    local p = dql and dql.mdict_prefetch
+    if not (p and p.r == r) then return nil end
+    if p.job and not p.job.done and Manager.renderer then Manager.renderer:finishJob(p.job) end
+    local w = p.widget
+    dql.mdict_prefetch = nil
+    if not w then return nil end
+    if p.width ~= dql.content_width or p.height ~= dql.definition_height then
+        w:free()
+        return nil
+    end
+    local box = w.htmlbox_widget
+    if box.slot then box.slot.held = nil end
+    box.background = false
+    return w
+end
+
+--- After a popup shows a result: lays out the next one (in the direction the reader
+-- moves) in the background, if it is an MDict result.
+function Manager.prefetch(state, dql)
+    if dql.is_wiki or not dql.results or not dql.dict_index then return end
+    local settings = state.settings or {}
+    if settings.prefetch == false or settings.renderer == "mupdf" then return end
+    local last = dql.mdict_last_index
+    dql.mdict_last_index = dql.dict_index
+    local step = (last and dql.dict_index < last) and -1 or 1
+    local index = dql.dict_index + step
+    local r = dql.results[index]
+    local p = dql.mdict_prefetch
+    if p and p.r == r then return end
+    Manager.dropPrefetch(dql)
+    if not (r and r.mdict and not r.mdict_note) then return end
+    local renderer = Manager.get(state)
+    if not (renderer and renderer.schedule) then return end
+    local avoid = {}
+    local shown = dql.mdict_widget and dql.mdict_widget.htmlbox_widget
+    if shown and shown.slot then avoid[shown.slot.id] = true end
+    p = { r = r, index = index, width = dql.content_width, height = dql.definition_height }
+    dql.mdict_prefetch = p
+    p.job = renderer:startJob(function()
+        local w, err = Manager.widget(state, dql, r, { definition = r.definition, avoid = avoid, background = true })
+        if not w then return nil, err end
+        local box = w.htmlbox_widget
+        box:_pageBb(box.page_number)
+        return w
+    end, function(job)
+        local w = job.ok and job.result or nil
+        if p.dropped or dql.mdict_prefetch ~= p then
+            if w then w:free() end
+            return
+        end
+        p.job = nil
+        p.widget = w
+        if w and w.htmlbox_widget.slot then w.htmlbox_widget.slot.held = true end
+        if not w and job.err and job.err ~= renderer.CANCELLED then
+            logger.dbg("MDict: could not lay out the next result ahead:", job.err)
+        end
+    end, Manager.PREFETCH_DELAY)
 end
 
 return Manager
