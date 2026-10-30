@@ -25,7 +25,7 @@ WebRenderer.JOB_STEP = 0.02 -- seconds between the steps of a background job
 WebRenderer.CANCELLED = "cancelled"
 WebRenderer.LOAD_TIMEOUT = 8
 WebRenderer.OP_TIMEOUT = 8
-WebRenderer.CAPTURE_TIMEOUT = 4
+WebRenderer.CAPTURE_TIMEOUT = 6 -- more than the Java side waits (3 s): the page memory must outlive it
 
 local ffi = require("ffi")
 -- KOReader's posix_h declares clock_gettime already; elsewhere declare it here

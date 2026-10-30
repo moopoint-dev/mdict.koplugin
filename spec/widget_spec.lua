@@ -379,6 +379,19 @@ describe("WebView widgets", function()
         local w2 = Manager.widget(state, dql, long)
         assert.equal(p2.widget, w2)
         dql.mdict_widget = w2
+        -- once shown, its next page is drawn in the background too; work on the entry
+        -- meanwhile (here its links) waits for that to finish first
+        local b2 = w2.htmlbox_widget
+        assert.is_true(b2.page_count > 1)
+        b2:_render()
+        local page_job = assert(b2.page_job)
+        assert.is_falsy(page_job.done)
+        assert.is_nil(b2.page_cache[2])
+        UIManager:runTasks()
+        b2:_links()
+        assert.is_true(page_job.done)
+        assert.truthy(b2.page_cache[2])
+        b2:freeBb()
         w:free()
         Manager.prefetch(state, dql)
         local p3 = assert(dql.mdict_prefetch)
@@ -405,6 +418,83 @@ describe("WebView widgets", function()
         end
         assert.equal(0, #UIManager.tasks)
         w3:free()
+        Manager.shutdown()
+    end)
+
+    it("draws a page again when it was captured before the WebView had drawn it", function()
+        local Manager = require("renderers/manager")
+        local Library = require("mdict/library")
+        local lib = Library.new({ dirs = { helper.fixtures() }, cache_dir = helper.tmpdir("slib") })
+        lib:scan()
+        local state = { library = lib, settings = {} }
+        local long = Lookup.run({ lib:byTitle("Basic Test") }, { "long" })[1]
+        local dql = {
+            definition = long.definition, dict_font_size = 20, content_width = 600, definition_height = 300,
+            html_dictionary_link_tapped_callback = function() end,
+        }
+        UIManager.tasks, UIManager.dirty = {}, {}
+        local w = assert(Manager.widget(state, dql, long))
+        local box = w.htmlbox_widget
+        assert.is_true(box.page_count > 2)
+        local box_renderer = box.renderer
+        -- the next `early` captures come before the WebView has drawn (the Java side gave up waiting)
+        local early, captures = 0, 0
+        box_renderer.renderPage = function(...)
+            captures = captures + 1
+            local ok, err, timing = WebRenderer.renderPage(...)
+            if ok and early > 0 then
+                early = early - 1
+                timing.via = "timeout"
+            end
+            return ok, err, timing
+        end
+        local clock = WebRenderer.clock
+        local function settle(job)
+            local deadline = clock() + 10
+            while not job.done and clock() < deadline do
+                UIManager:runTasks()
+                require("ffi").C.poll(nil, 0, 2)
+            end
+            assert.is_true(job.done)
+        end
+
+        -- the shown page: shown as it came, then drawn again in the background and shown again
+        box:_dropPages()
+        box:freeBb()
+        UIManager.tasks = {}
+        early = 1
+        box:_render()
+        local shown = box.bb
+        assert.is_true(box.page_stale[1])
+        local job = assert(box.page_job)
+        settle(job)
+        assert.is_true(job.result)
+        assert.is_nil(box.page_stale[1])
+        assert.equal(shown, box.bb) -- not yet: once the work that finished the job is done
+        UIManager.dirty = {}
+        UIManager:runTasks()
+        assert.are_not.equal(shown, box.bb)
+        assert.equal(1, #UIManager.dirty)
+        -- and then its next page is drawn ahead, as usual
+        job = assert(box.page_job)
+        early = 1
+        settle(job)
+        assert.is_true(box.page_stale[2])
+
+        -- a page drawn ahead too early is drawn again when the reader gets there
+        local before = captures
+        w:jumpToPage(2)
+        assert.equal(before + 1, captures)
+        assert.is_nil(box.page_stale[2])
+        -- one drawn right is used as it is
+        if box.page_job then settle(box.page_job) end
+        assert.truthy(box.page_cache[3])
+        before = captures
+        w:jumpToPage(3)
+        assert.equal(before, captures)
+
+        box_renderer.renderPage = nil
+        w:free()
         Manager.shutdown()
     end)
 end)

@@ -526,7 +526,10 @@
     return {
       cancel: function () { mo.disconnect(); },
       settle: async function () {
-        await frame();
+        // a click usually changes the entry at once; only when it did not, give the
+        // entry's scripts a frame (animation frames can take a third of a second on e-readers)
+        seen(mo.takeRecords());
+        if (!changed) await withTimeout(frame(), 400);
         while (Date.now() - last < 60 && Date.now() - start < 600) await sleep(20);
         seen(mo.takeRecords());
         mo.disconnect();
@@ -572,11 +575,16 @@
     await waitForImages(zoom, opts.imageTimeout || 1500);
     t.mark("images");
     if (document.fonts && document.fonts.ready) {
-      await withTimeout(document.fonts.ready, opts.fontTimeout || 2000);
+      var deadline = Date.now() + (opts.fontTimeout || 2000);
+      // a font starts loading when laying out text first needs it: lay out, and wait
+      // again until laying out asks for no more fonts
+      for (var i = 0; i < 5; i++) {
+        await withTimeout(document.fonts.ready, Math.max(0, deadline - Date.now()));
+        void zoom.offsetHeight;
+        if (document.fonts.status !== "loading" || Date.now() >= deadline) break;
+      }
     }
     t.mark("fonts");
-    await frame();
-    t.mark("frame");
     layout(state.pagination);
     t.mark("layout");
   }
@@ -610,6 +618,9 @@
         if (c) await watchChanges(function () { activate(c); });
       }
       t.mark("clicks");
+      // scripts may finish their work in an animation frame or a resize observer
+      if (state.scripts) await withTimeout(frame(), 400);
+      t.mark("scriptFrame");
 
       var vertical = opts.writing === "vertical" ? true
         : opts.writing === "horizontal" ? false
@@ -633,7 +644,8 @@
     n = Math.max(0, Math.min(state.pages - 1, n));
     state.page = n;
     present();
-    frame().then(frame).then(function () { done(opId, { page: n }); });
+    // the capture waits until the WebView has drawn this state
+    done(opId, { page: n });
   };
 
   // A tap that is not on a link: activates expandable sections and the like.
@@ -680,9 +692,6 @@
         // the entry under a viewer has not moved: keep its pages
         state.page = shownPage;
         present();
-        await frame();
-        await frame();
-        t.mark("frames");
         return done(opId, { handled: true, pages: state.pages, page: state.page, mode: state.mode, ms: t.done() });
       }
       await settleLayout({ imageTimeout: 1000 }, t);
@@ -690,10 +699,6 @@
       state.page = Math.max(0, Math.min(state.pages - 1, p >= 0 ? p : shownPage));
       present();
       t.mark("page");
-      // drawn before KOReader captures it, as after showPage
-      await frame();
-      await frame();
-      t.mark("frames");
       var res = { handled: true, pages: state.pages, page: state.page, mode: state.mode, ms: t.done() };
       if (path) res.path = path;
       done(opId, res);

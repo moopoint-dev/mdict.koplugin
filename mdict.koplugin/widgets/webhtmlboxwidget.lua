@@ -27,6 +27,7 @@ local WebHtmlBoxWidget = HtmlBoxWidget:extend{
 function WebHtmlBoxWidget:init()
     HtmlBoxWidget.init(self)
     self.page_cache = {}
+    self.page_stale = {}
     self.links_cache = {}
 end
 
@@ -61,6 +62,9 @@ end
 -- The pager is shared: another popup (a nested lookup) may have laid out
 -- another entry since, or the slot may hold another dictionary now.
 function WebHtmlBoxWidget:_ensure()
+    -- the next page may be being drawn in the background: let it finish first
+    local job = self.page_job
+    if job and not job.done and self.renderer:_job() ~= job then self.renderer:finishJob(job) end
     if self.slot and self.slot.owner == self and self.slot.key == self.slot_key then return true end
     local ok, err = self:_layout()
     if not ok then logger.warn("MDict: cannot restore entry:", err) end
@@ -69,16 +73,21 @@ end
 
 function WebHtmlBoxWidget:_dropPages()
     for _, bb in pairs(self.page_cache) do bb:free() end
-    self.page_cache, self.page_order = {}, {}
+    self.page_cache, self.page_order, self.page_stale = {}, {}, {}
     self.links_cache = {}
     self.find_index = nil
 end
 
 function WebHtmlBoxWidget:_pageBb(n)
     local bb = self.page_cache[n]
-    if bb then return bb end
-    bb = Blitbuffer.new(self.dimen.w, self.dimen.h, Blitbuffer.TYPE_BBRGB32)
+    if bb and not self.page_stale[n] then return bb end
     local ok, err = self:_ensure()
+    -- (the background job _ensure let finish may have drawn it)
+    bb = self.page_cache[n]
+    if bb and not self.page_stale[n] then return bb end
+    local cached = bb ~= nil
+    if cached then logger.info("MDict: drawing page", n, "again: it was captured before the WebView had drawn it") end
+    bb = bb or Blitbuffer.new(self.dimen.w, self.dimen.h, Blitbuffer.TYPE_BBRGB32)
     local timing
     if ok then ok, err, timing = self.renderer:renderPage(self.slot, n - 1, bb.data) end
     if not ok then
@@ -88,6 +97,10 @@ function WebHtmlBoxWidget:_pageBb(n)
         self.trace.logged = true
         logger.info(self:_timingText(timing))
     end
+    -- captured before the WebView had drawn the page (after a picture viewer closes, that
+    -- can take seconds on e-readers): shown if it is wanted now, and drawn again
+    self.page_stale[n] = ok and timing and timing.via == "timeout" or nil
+    if cached then return bb end
     self.page_cache[n] = bb
     self.page_order = self.page_order or {}
     table.insert(self.page_order, n)
@@ -95,7 +108,7 @@ function WebHtmlBoxWidget:_pageBb(n)
         local old = table.remove(self.page_order, 1)
         if old ~= n and self.page_cache[old] then
             self.page_cache[old]:free()
-            self.page_cache[old] = nil
+            self.page_cache[old], self.page_stale[old] = nil, nil
         end
     end
     return bb
@@ -103,7 +116,8 @@ end
 
 function WebHtmlBoxWidget:_render()
     if self.bb then return end
-    local page = self:_pageBb(self.page_number)
+    local n = self.page_number
+    local page = self:_pageBb(n)
     -- the cached page stays clean; highlights go on a copy
     self.bb = page:copy()
     if self.highlight_text_selection and self.highlight_rects then
@@ -112,17 +126,52 @@ function WebHtmlBoxWidget:_render()
         end
     end
     -- render the next page while the reader looks at this one
-    if not self._prefetch then
+    local function next_page()
+        local nxt = self.page_number + 1
+        if not self.freed and nxt <= self.page_count and (not self.page_cache[nxt] or self.page_stale[nxt])
+                and self.slot and self.slot.owner == self then
+            self:_pageBb(nxt)
+        end
+    end
+    if self.renderer.schedule then
+        -- in the background, so taps meanwhile are not held up; a page shown before the
+        -- WebView had drawn it is drawn again first
+        if not (self.page_job and not self.page_job.done) then
+            local stale, shown = self.page_stale[n], self.bb
+            local job
+            job = self.renderer:startJob(function()
+                if stale then return self:_redraw(n) end
+                next_page()
+            end, function()
+                if self.page_job == job then self.page_job = nil end
+                if not (stale and job.ok and job.result) then return end
+                -- shown after whatever let the job finish is done
+                UIManager:nextTick(function()
+                    if self.freed or self.bb ~= shown or self.page_number ~= n then return end
+                    self:freeBb()
+                    self:_render()
+                    UIManager:setDirty(self.dialog, function() return "partial", self.dimen end)
+                end)
+            end, stale and 0.5 or 0.3)
+            self.page_job = job
+        end
+    elseif not self._prefetch then
         self._prefetch = function()
             self._prefetch = nil
-            local nxt = self.page_number + 1
-            if not self.freed and nxt <= self.page_count and not self.page_cache[nxt]
-                    and self.slot and self.slot.owner == self then
-                self:_pageBb(nxt)
-            end
+            next_page()
         end
         UIManager:scheduleIn(0.3, self._prefetch)
     end
+end
+
+-- Draws shown page n again after it was captured too early. True once it is right.
+function WebHtmlBoxWidget:_redraw(n)
+    for _ = 1, 2 do
+        if self.freed or self.page_number ~= n or not self.page_stale[n] then return false end
+        self:_pageBb(n)
+        if not self.page_stale[n] then return true end
+    end
+    return false
 end
 
 local function marks(t)
@@ -169,6 +218,10 @@ function WebHtmlBoxWidget:free()
     if self._prefetch then
         UIManager:unschedule(self._prefetch)
         self._prefetch = nil
+    end
+    if self.page_job then
+        self.renderer:cancelJob(self.page_job)
+        self.page_job = nil
     end
     self:_dropPages()
     self.freed = true

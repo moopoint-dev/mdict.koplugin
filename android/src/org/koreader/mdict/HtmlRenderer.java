@@ -61,11 +61,11 @@ public final class HtmlRenderer {
     private static final String TAG = "MDictRenderer";
     private static final String HOST_SUFFIX = ".mdict.local";
     private static final int NEED_TIMEOUT_MS = 4000;
-    private static final int VISUAL_STATE_TIMEOUT_MS = 400;
-    // Once visual state callbacks are known not to come (the WebView has zero alpha
-    // and some systems never draw it), captures wait this long instead.
-    private static final int SETTLE_MS = 50;
-    private static final int STATE_TRIES = 2;
+    // A capture draws once the WebView has drawn the pager's latest state: when its
+    // visual state callback comes (two animation frames later where there is none), or
+    // after this at the latest. On e-readers a frame can take a third of a second, and
+    // a few seconds after a large picture viewer closes.
+    private static final int CAPTURE_WAIT_MS = 3000;
 
     private final Activity activity;
     private final Handler ui;
@@ -74,8 +74,8 @@ public final class HtmlRenderer {
             new ConcurrentHashMap<Integer, ArrayBlockingQueue<String>>();
     private final AtomicInteger nextRid = new AtomicInteger(1);
     private final Map<Integer, Slot> slots = new ConcurrentHashMap<Integer, Slot>();
-    // visual state callbacks seen and missed (UI thread only)
-    private int stateSeen = 0, stateMissed = 0;
+    // captures waiting for their animation frames, by id
+    private final Map<Integer, Runnable> framed = new ConcurrentHashMap<Integer, Runnable>();
     // bitmaps shared by all slots, by size (pages of horizontal and of vertical entries
     // differ by the scroll bar): captures run one at a time on the UI thread (UI thread only)
     private final Map<Long, Bitmap> bitmaps = new HashMap<Long, Bitmap>();
@@ -265,24 +265,26 @@ public final class HtmlRenderer {
                     @Override public void run() {
                         if (fired[0]) return;
                         fired[0] = true;
-                        if (via.equals("state")) stateSeen++;
-                        else if (via.equals("timeout")) stateMissed++;
+                        framed.remove(id);
                         long t = SystemClock.uptimeMillis();
                         boolean ok = drawInto(s, dst, width, height);
                         long done = SystemClock.uptimeMillis();
                         emitCaptured(slot, id, ok, t - start, done - t, via);
                     }
                 }
-                boolean useState = Build.VERSION.SDK_INT >= 23 && (stateSeen > 0 || stateMissed < STATE_TRIES);
-                if (useState) {
+                if (Build.VERSION.SDK_INT >= 23) {
                     final Draw onState = new Draw("state");
                     s.view.postVisualStateCallback(id, new WebView.VisualStateCallback() {
                         @Override public void onComplete(long requestId) { onState.run(); }
                     });
-                    ui.postDelayed(new Draw("timeout"), VISUAL_STATE_TIMEOUT_MS);
                 } else {
-                    ui.postDelayed(new Draw("settle"), SETTLE_MS);
+                    // no visual state callbacks: two animation frames instead (only here, as
+                    // the WebView then draws those frames too)
+                    framed.put(id, new Draw("frames"));
+                    s.view.evaluateJavascript("requestAnimationFrame(function(){requestAnimationFrame(function(){"
+                            + "KOBridge.framed(" + id + ")})})", null);
                 }
+                ui.postDelayed(new Draw("timeout"), CAPTURE_WAIT_MS);
             }
         });
     }
@@ -438,6 +440,16 @@ public final class HtmlRenderer {
 
         @JavascriptInterface public void log(String msg) {
             Log.i(TAG, "js: " + msg);
+        }
+
+        /** Two animation frames have passed since capture `id` was asked for. */
+        @JavascriptInterface public void framed(final int id) {
+            ui.post(new Runnable() {
+                @Override public void run() {
+                    Runnable draw = framed.get(id);
+                    if (draw != null) draw.run();
+                }
+            });
         }
     }
 
