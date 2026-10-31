@@ -9,7 +9,7 @@ local function fake_bridge()
     local function push(ev) b.queue[#b.queue + 1] = { raw = json.encode(ev), ready = b.polls + (b.lag or 0) } end
     function b.session(_, fn) return fn() end
     function b.open(_, slot) push({ ev = "opened", slot = slot }) end
-    function b.load(_, slot, base) b.base = base; push({ ev = "loaded", slot = slot }) end
+    function b.load(_, slot, base) b.base = base; push({ ev = "loaded", slot = slot, renewIn = b.renew_in }) end
     function b.call(_, slot, id, op, args)
         b.calls[#b.calls + 1] = op
         local a = json.decode(args)
@@ -100,6 +100,25 @@ describe("webview renderer", function()
         assert.equal(5, loads)
         assert(wr:document({ dict_id = "e", cache_root = "/c", stylesheets = {} }, 1150, 1100))
         assert.equal(5, loads)
+    end)
+
+    it("renews an old WebView that keeps its document", function()
+        local bridge = fake_bridge()
+        local wr = WebRenderer.new({ bridge = bridge })
+        local doc = { dict_id = "a", cache_root = "/c", stylesheets = {} }
+        bridge.renew_in = 60000
+        local a = assert(wr:document(doc, 1150, 1100))
+        local loads = 0
+        local load = bridge.load
+        bridge.load = function(...) loads = loads + 1; return load(...) end
+        assert.equal(a, assert(wr:document(doc, 1150, 1100)))
+        assert.equal(0, loads)
+        a.renew_at = a.renew_at - 61 -- a minute later
+        assert.equal(a, assert(wr:document(doc, 1150, 1100)))
+        assert.equal(1, loads)
+        assert.is_true(a.renew_at > require("mdict/clock")() + 59)
+        assert(wr:document(doc, 1150, 1100))
+        assert.equal(1, loads)
     end)
 
     -- a scheduler run by hand: run() does one round of the scheduled functions

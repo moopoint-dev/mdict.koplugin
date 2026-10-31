@@ -288,7 +288,9 @@ function WebRenderer:document(doc, w, h, avoid)
         slot.w, slot.h = w, h
         slot.trace.open = ms(t)
     end
-    -- renew: the WebView asked for its document again, to load it into a new WebView
+    -- renew: the WebView asked for its document again, to load it into a new WebView. An old
+    -- WebView is renewed too when it keeps one document, as a dictionary's links do.
+    if slot.renew_at and monotonic() >= slot.renew_at then slot.renew = true end
     if not (cached and slot.ready and not slot.renew) then
         local t = monotonic()
         slot.dict_id = doc.dict_id
@@ -303,6 +305,7 @@ function WebRenderer:document(doc, w, h, avoid)
             return nil, "load: " .. tostring(err)
         end
         slot.ready, slot.renew = true, nil
+        slot.renew_at = ev.renewIn and monotonic() + ev.renewIn / 1000
         slot.trace.load = ms(t)
     end
     -- the viewport must have the requested size before laying out an entry

@@ -47,7 +47,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * that touches a WebView runs on the UI thread. Results come back as UTF-8
  * JSON events that the Lua side collects with {@link #poll(int)}:
  *
- *   {"ev":"loaded","slot":s}                    document finished loading
+ *   {"ev":"loaded","slot":s,"renewIn":ms}       document finished loading; after ms, the next
+ *                                               load() gives the slot a new WebView
  *   {"ev":"done","slot":s,"id":n,"r":<json>}    a pager op finished
  *   {"ev":"need","slot":s,"rid":n,"path":"..."} a resource is missing from the cache;
  *                                               answer with provide(rid, file)
@@ -69,12 +70,15 @@ public final class HtmlRenderer {
     // after this at the latest. On e-readers a frame can take a third of a second, and
     // a few seconds after a large picture viewer closes.
     private static final int CAPTURE_WAIT_MS = 3000;
-    // On e-readers a WebView's captures get slower the longer it is used: from tens of
-    // milliseconds to 2 or 3 s within minutes, while a new WebView in the same process is
-    // fast again. So a slot gets a new WebView with its next document once a capture
-    // waited longer than this, or once its WebView is older than RENEW_AGE_MS.
+    // On e-readers a WebView's captures wait longer the older it is, however little it is
+    // used: in one test the median wait was 25 ms in its first 10 s, 250 ms at 30 to 60 s
+    // and 1 s after 150 s, while drawing stayed at 10 ms. A new WebView in the same process
+    // is fast again, and loading a document into one costs only 20 to 40 ms more. So a slot
+    // gets a new WebView with its next document once a capture waited longer than this, or
+    // once its WebView is older than RENEW_AGE_MS (the Lua side then reloads a document it
+    // would otherwise keep).
     private static final int SLOW_CAPTURE_MS = 1500;
-    private static final long RENEW_AGE_MS = 3 * 60 * 1000;
+    private static final long RENEW_AGE_MS = 30 * 1000;
 
     private final Activity activity;
     private final Handler ui;
@@ -514,7 +518,8 @@ public final class HtmlRenderer {
         Client(Slot s) { this.s = s; }
 
         @Override public void onPageFinished(WebView view, String url) {
-            emit("{\"ev\":\"loaded\",\"slot\":" + s.id + "}");
+            long renewIn = Math.max(0, RENEW_AGE_MS - (SystemClock.uptimeMillis() - s.born));
+            emit("{\"ev\":\"loaded\",\"slot\":" + s.id + ",\"renewIn\":" + renewIn + "}");
         }
 
         @Override public boolean shouldOverrideUrlLoading(WebView view, String url) {
