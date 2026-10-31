@@ -69,10 +69,12 @@ public final class HtmlRenderer {
     // after this at the latest. On e-readers a frame can take a third of a second, and
     // a few seconds after a large picture viewer closes.
     private static final int CAPTURE_WAIT_MS = 3000;
-    // A slot whose capture waited longer than this gets a new WebView with its next
-    // document: on e-readers, captures got slower each time KOReader had been in the
-    // background (2 to 3 s after ten minutes), while a new process was fast.
+    // On e-readers a WebView's captures get slower the longer it is used: from tens of
+    // milliseconds to 2 or 3 s within minutes, while a new WebView in the same process is
+    // fast again. So a slot gets a new WebView with its next document once a capture
+    // waited longer than this, or once its WebView is older than RENEW_AGE_MS.
     private static final int SLOW_CAPTURE_MS = 1500;
+    private static final long RENEW_AGE_MS = 3 * 60 * 1000;
 
     private final Activity activity;
     private final Handler ui;
@@ -94,7 +96,8 @@ public final class HtmlRenderer {
         volatile File cacheRoot;
         volatile Map<String, File> files = new HashMap<String, File>();
         final ConcurrentHashMap<Integer, String> args = new ConcurrentHashMap<Integer, String>();
-        volatile boolean slow; // a capture waited long: the next document gets a new WebView
+        volatile boolean renew; // the next document gets a new WebView
+        long born; // when the WebView was made (uptime, UI thread only)
 
         Slot(int id) { this.id = id; }
     }
@@ -186,9 +189,9 @@ public final class HtmlRenderer {
     }
 
     /** Replaces the slot's WebView with a new one of the same size. (UI thread only) */
-    private void renew(Slot s) {
+    private void replaceView(Slot s) {
         long t = SystemClock.uptimeMillis();
-        s.slow = false;
+        s.renew = false;
         WebView old = s.view;
         ViewGroup.LayoutParams lp = old.getLayoutParams();
         int width = lp.width, height = lp.height;
@@ -204,6 +207,7 @@ public final class HtmlRenderer {
 
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
     private WebView createView(final Slot s) {
+        s.born = SystemClock.uptimeMillis();
         WebView v = new WebView(activity);
         v.setAlpha(0f);
         v.setBackgroundColor(Color.WHITE);
@@ -244,7 +248,7 @@ public final class HtmlRenderer {
                 Slot s = slots.get(slot);
                 if (s == null) { emitError(slot, new IllegalStateException("no such slot")); return; }
                 try {
-                    if (s.slow) renew(s);
+                    if (s.renew || SystemClock.uptimeMillis() - s.born > RENEW_AGE_MS) replaceView(s);
                     s.host = URI.create(base).getHost();
                     s.cacheRoot = new File(root);
                     Map<String, File> map = new HashMap<String, File>();
@@ -289,7 +293,7 @@ public final class HtmlRenderer {
         ui.post(new Runnable() {
             @Override public void run() {
                 final Slot s = slots.get(slot);
-                if (s == null) { emitCaptured(slot, id, false, 0, 0, "none", false); return; }
+                if (s == null) { emitCaptured(slot, id, false, 0, 0, "none", false, ""); return; }
                 final long start = SystemClock.uptimeMillis();
                 final boolean[] fired = {false};
                 // for the log: when the UI thread got to it, and when the next vsync came
@@ -308,12 +312,15 @@ public final class HtmlRenderer {
                         long t = SystemClock.uptimeMillis();
                         boolean ok = drawInto(s, dst, width, height);
                         long done = SystemClock.uptimeMillis();
-                        if (t - start > SLOW_CAPTURE_MS && !s.slow) {
-                            s.slow = true;
+                        if (!s.renew && t - start > SLOW_CAPTURE_MS) {
+                            s.renew = true;
                             Log.i(TAG, "slot " + slot + ": capture waited " + (t - start) + " ms: new WebView with the next document");
+                        } else if (!s.renew && t - s.born > RENEW_AGE_MS) {
+                            s.renew = true;
+                            Log.i(TAG, "slot " + slot + ": WebView " + (t - s.born) / 1000 + " s old: new WebView with the next document");
                         }
-                        Log.d(TAG, "capture " + id + ": queued " + queued + " ms, vsync " + vsync[0] + " ms");
-                        emitCaptured(slot, id, ok, t - start, done - t, via, s.slow);
+                        emitCaptured(slot, id, ok, t - start, done - t, via, s.renew,
+                                ", queued " + queued + " ms, vsync " + vsync[0] + " ms");
                     }
                 }
                 if (Build.VERSION.SDK_INT >= 23) {
@@ -358,8 +365,10 @@ public final class HtmlRenderer {
         }
     }
 
-    private void emitCaptured(int slot, int id, boolean ok, long waitMs, long drawMs, String via, boolean renew) {
-        Log.d(TAG, "capture " + id + ": waited " + waitMs + " ms (" + via + "), drew in " + drawMs + " ms");
+    private void emitCaptured(int slot, int id, boolean ok, long waitMs, long drawMs, String via, boolean renew,
+                              String more) {
+        Log.d(TAG, "slot " + slot + ": capture " + id + ": waited " + waitMs + " ms (" + via + "), drew in " + drawMs
+                + " ms" + more);
         emit("{\"ev\":\"captured\",\"slot\":" + slot + ",\"id\":" + id + ",\"ok\":" + ok
                 + ",\"wait\":" + waitMs + ",\"draw\":" + drawMs + ",\"via\":\"" + via + "\""
                 + (renew ? ",\"renew\":true" : "") + "}");

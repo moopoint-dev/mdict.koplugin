@@ -103,6 +103,31 @@ describe("WebView widgets", function()
         assert.equal(live, Blitbuffer.live)
     end)
 
+    it("draws the next page ahead in the way the reader turns, and keeps recent pages", function()
+        local w = widget_for(entry("long"))
+        local box = w.htmlbox_widget
+        assert.is_true(box.page_count > 4)
+        box:_render()
+        for _ = 1, 3 do
+            w:scrollText(1)
+            UIManager:runTasks()
+        end
+        assert.equal(4, box.page_number)
+        assert.truthy(box.page_cache[5])
+        assert.is_nil(box.page_cache[2])
+        -- turning back: the page before is drawn ahead, and the one just shown stays
+        w:scrollText(-1)
+        UIManager:runTasks()
+        assert.equal(3, box.page_number)
+        assert.truthy(box.page_cache[2])
+        assert.truthy(box.page_cache[3])
+        -- and forward again
+        w:scrollText(1)
+        UIManager:runTasks()
+        assert.truthy(box.page_cache[5])
+        w:free()
+    end)
+
     it("finds words split by markup, but not across blocks", function()
         local w = widget_for(entry("split"))
         local box = w.htmlbox_widget

@@ -15,6 +15,7 @@ Hooks into KOReader's dictionary lookup.
 ]]
 
 local Lookup = require("mdict/lookup")
+local clock = require("mdict/clock")
 
 local Integration = {
     installed = false,
@@ -144,24 +145,26 @@ function Integration.startSdcv(orig, rd, word, dict_names, fuzzy_search)
         return orig(rd, word, dict_names, fuzzy_search)
     end
     local results
+    local t_sdcv = clock()
     if others == nil or #others > 0 then
         results = orig(rd, word, others, fuzzy_search)
     else
         results = {}
     end
+    t_sdcv = clock() - t_sdcv
     local words = Integration.candidates(rd, word)
     local all_cjk = true
     for _, w in ipairs(words) do
         if not has_cjk(w) then all_cjk = false end
     end
     local display = Integration.pending_display and Integration.pending_display[word]
-    local t0 = os.clock()
+    local t0, c0 = clock(), os.clock()
     local mres, problems = Lookup.run(targets, words, { fuzzy = fuzzy_search and not all_cjk, display_word = display })
     if #mres == 0 and #problems == 0 and all_cjk then
         mres, problems = Integration.prefixLookup(targets, word, display)
     end
-    require("logger").dbg("MDict: looked up", word, "in", #targets, "dictionaries:", #mres, "results,",
-        string.format("%.1f ms CPU", (os.clock() - t0) * 1000))
+    require("logger").info(string.format("MDict: looked up in %d dictionaries: %d results in %.0f ms (%.0f ms CPU);"
+        .. " other dictionaries %.0f ms", #targets, #mres, (clock() - t0) * 1000, (os.clock() - c0) * 1000, t_sdcv * 1000))
     for __, p in ipairs(problems) do
         local text
         if p.state == "indexing" then

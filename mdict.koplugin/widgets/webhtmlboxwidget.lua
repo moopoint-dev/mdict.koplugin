@@ -27,6 +27,7 @@ local WebHtmlBoxWidget = HtmlBoxWidget:extend{
 function WebHtmlBoxWidget:init()
     HtmlBoxWidget.init(self)
     self.page_cache = {}
+    self.page_order = {}
     self.page_stale = {}
     self.links_cache = {}
 end
@@ -38,6 +39,7 @@ function WebHtmlBoxWidget:loadEntry(doc, entry)
     local ok, err = self:_layout()
     if not ok then return nil, err end
     self.page_number = self.anchor_page or 1
+    self.shown_page, self.turn_step = nil, nil
     self:_dropPages()
     return true
 end
@@ -78,9 +80,23 @@ function WebHtmlBoxWidget:_dropPages()
     self.find_index = nil
 end
 
+-- Pages are kept by last use: turning back and forth stays on cached pages.
+local function touch(order, n)
+    for i = #order, 1, -1 do
+        if order[i] == n then
+            table.remove(order, i)
+            break
+        end
+    end
+    order[#order + 1] = n
+end
+
 function WebHtmlBoxWidget:_pageBb(n)
     local bb = self.page_cache[n]
-    if bb and not self.page_stale[n] then return bb end
+    if bb and not self.page_stale[n] then
+        touch(self.page_order, n)
+        return bb
+    end
     local ok, err = self:_ensure()
     -- (the background job _ensure let finish may have drawn it)
     bb = self.page_cache[n]
@@ -100,10 +116,9 @@ function WebHtmlBoxWidget:_pageBb(n)
     -- captured before the WebView had drawn the page (after a picture viewer closes, that
     -- can take seconds on e-readers): shown if it is wanted now, and drawn again
     self.page_stale[n] = ok and timing and timing.via == "timeout" or nil
+    touch(self.page_order, n)
     if cached then return bb end
     self.page_cache[n] = bb
-    self.page_order = self.page_order or {}
-    table.insert(self.page_order, n)
     while #self.page_order > self.page_cache_size do
         local old = table.remove(self.page_order, 1)
         if old ~= n and self.page_cache[old] then
@@ -117,6 +132,9 @@ end
 function WebHtmlBoxWidget:_render()
     if self.bb then return end
     local n = self.page_number
+    -- the way the reader turns pages
+    if self.shown_page and n ~= self.shown_page then self.turn_step = n < self.shown_page and -1 or 1 end
+    self.shown_page = n
     local page = self:_pageBb(n)
     -- the cached page stays clean; highlights go on a copy
     self.bb = page:copy()
@@ -125,10 +143,10 @@ function WebHtmlBoxWidget:_render()
             self.bb:darkenRect(rect.x, rect.y, rect.w, rect.h, self.highlight_lighten_factor)
         end
     end
-    -- render the next page while the reader looks at this one
+    -- render the next page (in the way the reader turns) while the reader looks at this one
     local function next_page()
-        local nxt = self.page_number + 1
-        if not self.freed and nxt <= self.page_count and (not self.page_cache[nxt] or self.page_stale[nxt])
+        local nxt = self.page_number + (self.turn_step or 1)
+        if not self.freed and nxt >= 1 and nxt <= self.page_count and (not self.page_cache[nxt] or self.page_stale[nxt])
                 and self.slot and self.slot.owner == self then
             self:_pageBb(nxt)
         end
