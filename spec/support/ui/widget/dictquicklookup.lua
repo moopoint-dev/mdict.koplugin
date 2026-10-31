@@ -16,6 +16,8 @@ end
 
 function DictQuickLookup:onCloseWidget() self.closed = true end
 
+function DictQuickLookup:paintTo() self.painted = (self.painted or 0) + 1 end
+
 function DictQuickLookup:_instantiateScrollWidget()
     local r = self.results[self.dict_index]
     if r.is_html then

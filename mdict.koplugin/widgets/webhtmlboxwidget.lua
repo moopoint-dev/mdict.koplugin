@@ -44,8 +44,21 @@ function WebHtmlBoxWidget:loadEntry(doc, entry)
     return true
 end
 
+-- Slots other popups still show are left alone when there is another: a nested popup
+-- taking one would make the popup under it lay its entry out again (seconds for a long
+-- entry) when the reader goes back to it and taps a link.
+function WebHtmlBoxWidget:_avoid()
+    local avoid = {}
+    for id in pairs(self.avoid_slots or {}) do avoid[id] = true end
+    for id, s in pairs(self.renderer.slots or {}) do
+        local o = s.owner
+        if o and o ~= self and not o.freed and not o.background then avoid[id] = true end
+    end
+    return avoid
+end
+
 function WebHtmlBoxWidget:_layout()
-    local slot, err = self.renderer:document(self.doc, self.dimen.w, self.dimen.h, self.avoid_slots)
+    local slot, err = self.renderer:document(self.doc, self.dimen.w, self.dimen.h, self:_avoid())
     if not slot then return nil, err end
     local info
     info, err = self.renderer:setEntry(slot, self.entry)

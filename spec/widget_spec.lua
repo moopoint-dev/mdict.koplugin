@@ -285,8 +285,11 @@ describe("WebView widgets", function()
     end)
 
     it("restores its entry after a nested popup used the pager", function()
+        local max_slots = renderer.max_slots
+        renderer.max_slots = 1 -- so that the nested popup takes the only one
         local a = widget_for(entry("long"))
         local b = widget_for(entry("Apple"))
+        assert.equal(a.htmlbox_widget.slot, b.htmlbox_widget.slot)
         local abox = a.htmlbox_widget
         a:scrollText(1)
         a:scrollText(1)
@@ -295,6 +298,24 @@ describe("WebView widgets", function()
         assert.is_true(abox.bb:inkRatio() > 0.02)
         a:free()
         b:free()
+        renderer.max_slots = max_slots
+    end)
+
+    it("leaves the pager of a popup still shown to the popups over it", function()
+        local a = widget_for(entry("long"))
+        local abox = a.htmlbox_widget
+        local b = widget_for(entry("Apple"))
+        assert.are_not.equal(abox.slot, b.htmlbox_widget.slot)
+        b:free()
+        -- the closed popup's slot can be used again, still not the shown one
+        local c = widget_for(entry("Apple"))
+        assert.are_not.equal(abox.slot, c.htmlbox_widget.slot)
+        assert.equal(abox, abox.slot.owner)
+        -- with every slot shown, one is still taken
+        local d = widget_for(entry("split"))
+        local e = widget_for(entry("Apple"))
+        assert.equal(e.htmlbox_widget, e.htmlbox_widget.slot.owner)
+        for _, w in ipairs({ e, d, c, a }) do w:free() end
     end)
 
     it("opens at an anchor", function()

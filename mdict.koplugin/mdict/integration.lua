@@ -146,6 +146,7 @@ function Integration.startSdcv(orig, rd, word, dict_names, fuzzy_search)
     end
     local results
     local t_sdcv = clock()
+    Integration.lookup_started = t_sdcv
     if others == nil or #others > 0 then
         results = orig(rd, word, others, fuzzy_search)
     else
@@ -291,6 +292,7 @@ function Integration.installWidgetHooks()
     local orig_update = DictQuickLookup.update
     local orig_init = DictQuickLookup.init
     local orig_close = DictQuickLookup.onCloseWidget
+    local orig_paint = DictQuickLookup.paintTo
 
     -- lays out the next MDict result while the reader looks at this one
     local function prefetch(dql)
@@ -338,8 +340,23 @@ function Integration.installWidgetHooks()
 
     if orig_init then
         DictQuickLookup.init = function(dql, ...)
+            dql.mdict_lookup_started, Integration.lookup_started = Integration.lookup_started, nil
             local a, b = orig_init(dql, ...)
             prefetch(dql)
+            return a, b
+        end
+    end
+
+    -- when a popup is first drawn, for the log (the screen shows it after its refresh)
+    if orig_paint then
+        DictQuickLookup.paintTo = function(dql, ...)
+            local a, b = orig_paint(dql, ...)
+            local t0 = dql.mdict_lookup_started
+            if t0 then
+                dql.mdict_lookup_started = nil
+                require("logger").info(string.format("MDict: popup drawn %.0f ms after the lookup started",
+                    (clock() - t0) * 1000))
+            end
             return a, b
         end
     end
