@@ -57,6 +57,16 @@ describe("reader", function()
         d:close()
     end)
 
+    it("ends a record at its terminator when the next key's record is further on", function()
+        for _, enc in ipairs({ "utf-8", "utf-16" }) do
+            local d = assert(Reader.open(fx .. "/order-" .. enc .. ".mdx"))
+            local seen = {}
+            d:eachKey(function(k, ord) seen[#seen + 1] = k .. "=" .. d:record(ord) end)
+            assert.same({ "pitch=<p>tar</p>", "pitch=<p>field</p>", "pitcher=<p>jug</p>" }, seen)
+            d:close()
+        end
+    end)
+
     it("reports unreadable files", function()
         local path = helper.tmpdir("bad") .. "/x.mdx"
         local f = io.open(path, "wb"); f:write("not a dictionary"); f:close()

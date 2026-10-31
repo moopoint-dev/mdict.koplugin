@@ -97,6 +97,165 @@ local function lazy(t, fields)
     end })
 end
 
+local function is_space(b) return b == 32 or b == 10 or b == 13 or b == 9 or b == 12 or b == 0 end
+
+-- End of the element "<name ...>...</name>" that starts at i, or nil.
+local function close_of(r, i, name)
+    local s = i
+    while true do
+        s = r:find("</", s + 1, true)
+        if not s then return nil end
+        if r:sub(s + 2, s + 1 + #name):lower() == name then return r:find(">", s, true) end
+    end
+end
+
+-- Top-level items that only separate entries.
+local SEPARATOR = { hr = true, br = true, link = true, meta = true, wbr = true }
+
+--- Splits a record into its entries: the items at the top level of its markup, each with
+-- the scripts and styles right after it. Rules, line breaks, stylesheet links, comments and
+-- spaces are not entries. Returns a list of { from, to } byte ranges.
+function Lookup.entriesOf(r)
+    local units = {}
+    local depth, i, n = 0, 1, #r
+    local open, last -- the entry being read, and the last one while only scripts follow it
+    local function text(from, to)
+        while from <= to and is_space(r:byte(from)) do from = from + 1 end
+        while to >= from and is_space(r:byte(to)) do to = to - 1 end
+        if from <= to then
+            last = { from = from, to = to }
+            units[#units + 1] = last
+        end
+    end
+    while i <= n do
+        local lt = r:find("<", i, true)
+        if depth == 0 then text(i, (lt or n + 1) - 1) end
+        if not lt then break end
+        local c = r:byte(lt + 1)
+        local gt = r:find(">", lt, true) or n
+        if c == 33 then -- <! comment or doctype
+            if r:sub(lt + 2, lt + 3) == "--" then gt = select(2, r:find("-->", lt + 4, true)) or n end
+            if depth == 0 then last = nil end
+        elseif c == 47 then -- </
+            if depth > 0 then
+                depth = depth - 1
+                if depth == 0 then
+                    open.to = gt
+                    units[#units + 1], last, open = open, open, nil
+                end
+            end
+        else
+            local name = r:match("^%a%w*", lt + 1)
+            if not name then
+                gt = lt -- a "<" in text
+                if depth == 0 then text(lt, lt) end
+            else
+                name = name:lower()
+                if name == "script" or name == "style" then
+                    gt = close_of(r, lt, name) or n
+                    if depth == 0 and last then last.to = gt end
+                elseif VOID[name] or r:byte(gt - 1) == 47 then
+                    if depth == 0 then
+                        if SEPARATOR[name] then
+                            last = nil
+                        else
+                            last = { from = lt, to = gt }
+                            units[#units + 1] = last
+                        end
+                    end
+                else
+                    if depth == 0 then open = { from = lt } end
+                    depth = depth + 1
+                end
+            end
+        end
+        i = gt + 1
+    end
+    if open then
+        open.to = n
+        units[#units + 1] = open
+    end
+    return units
+end
+
+--- Some exporters store every entry for a word on one page under its plain key, and each
+-- entry again under a key of its own ("spring" and "【spring】"), and a lookup finds both, so the
+-- same entry would be shown twice. An entry found in several records of one dictionary's
+-- results is kept only in the record with the fewest entries (the first of those), and
+-- cut out of the others with the separator before it; a record left without entries is
+-- dropped. The order of the results is kept.
+Lookup.MIN_REPEAT = 200 -- bytes; shorter entries (headers, notes) may repeat on purpose
+function Lookup.trimRepeats(entries)
+    local count = #entries
+    if count < 2 then return entries end
+    -- Quick check: does a piece of one record's text appear in another as long? The piece
+    -- starts where text starts, so it is not just markup that every entry has, and so the
+    -- search stops less often on its first byte.
+    local suspect = false
+    for i = 1, count do
+        local b = entries[i].record
+        if #b >= Lookup.MIN_REPEAT then
+            local last = #b
+            while last > 0 and is_space(b:byte(last)) do last = last - 1 end
+            local from = select(2, b:find(">[^<%s]", math.floor(#b / 2))) or select(2, b:find(">[^<%s]"))
+            local probe = from and b:sub(from, math.min(from + 63, last))
+            for j = 1, count do
+                local a = entries[j].record
+                if probe and j ~= i and #a >= #b and a:find(probe, 1, true) then suspect = true; break end
+            end
+        end
+        if suspect then break end
+    end
+    if not suspect then return entries end
+    local split, owner = {}, {}
+    for i, e in ipairs(entries) do
+        local r = e.record
+        local list, n = {}, 0
+        for k, u in ipairs(Lookup.entriesOf(r)) do
+            local s = r:sub(u.from, u.to)
+            list[k] = { from = u.from, to = u.to, s = #s >= Lookup.MIN_REPEAT and s or nil }
+            if list[k].s then n = n + 1 end
+        end
+        split[i] = { units = list, n = n }
+        for _, u in ipairs(list) do
+            if u.s then
+                local o = owner[u.s]
+                if not o or n < split[o].n then owner[u.s] = i end
+            end
+        end
+    end
+    local out = {}
+    for i, e in ipairs(entries) do
+        local r, units = e.record, split[i].units
+        local kept, cut = {}, false
+        for _, u in ipairs(units) do
+            if u.s and owner[u.s] ~= i then cut = true else kept[#kept + 1] = u end
+        end
+        local left = false
+        for _, u in ipairs(kept) do left = left or u.s ~= nil end
+        if not cut then
+            out[#out + 1] = e
+        elseif left then
+            -- what came before the first entry, each kept entry with the separator that came
+            -- before it, and what came after the last entry
+            local parts, prev = { r:sub(1, units[1].from - 1) }, {}
+            for k, u in ipairs(units) do prev[u] = units[k - 1] end
+            for k, u in ipairs(kept) do
+                if k > 1 then parts[#parts + 1] = r:sub(prev[u].to + 1, u.from - 1) end
+                parts[#parts + 1] = r:sub(u.from, u.to)
+            end
+            parts[#parts + 1] = r:sub(units[#units].to + 1)
+            local trimmed = table.concat(parts)
+            local anchor = e.anchor ~= "" and e.anchor
+            if not (anchor and r:find(anchor, 1, true) and not trimmed:find(anchor, 1, true)) then
+                e.record = trimmed -- unless a link points into what was cut
+            end
+            out[#out + 1] = e
+        end
+    end
+    return out
+end
+
 --- Runs the lookups. dicts: Dictionary objects in display order; words: candidate words.
 -- opts: fuzzy, display_word (shown instead of internal keys).
 -- Returns results, and a list of { dict, state } for dictionaries that could not answer.
@@ -104,7 +263,7 @@ function Lookup.run(dicts, words, opts)
     opts = opts or {}
     local results, problems = {}, {}
     for _, d in ipairs(dicts) do
-        local seen = {}
+        local seen, found = {}, {}
         local failed
         for _, w in ipairs(words) do
             local entries, err = d:lookup(w, { fuzzy = opts.fuzzy, seen = seen })
@@ -113,24 +272,28 @@ function Lookup.run(dicts, words, opts)
                 break
             end
             for _, e in ipairs(entries) do
-                local html
-                local function entry_html()
-                    html = html or d:entryHtml(e.record)
-                    return html
-                end
-                local word = e.key
-                if Lookup.isInternalKey(word) then word = opts.display_word end
-                results[#results + 1] = lazy({
-                    dict = d.title,
-                    word = word,
-                    is_html = true,
-                    dictionary_resource_directory = d.res_dir,
-                    mdict = lazy({ id = d.id, anchor = e.anchor, key = e.key, fuzzy = e.fuzzy }, { html = entry_html }),
-                }, {
-                    definition = function() return Html.stripScripts(entry_html()) end,
-                    word = function() return Lookup.headwordOf(entry_html()) or w end,
-                })
+                e.lookup_word = w
+                found[#found + 1] = e
             end
+        end
+        for _, e in ipairs(Lookup.trimRepeats(found)) do
+            local html
+            local function entry_html()
+                html = html or d:entryHtml(e.record)
+                return html
+            end
+            local word = e.key
+            if Lookup.isInternalKey(word) then word = opts.display_word end
+            results[#results + 1] = lazy({
+                dict = d.title,
+                word = word,
+                is_html = true,
+                dictionary_resource_directory = d.res_dir,
+                mdict = lazy({ id = d.id, anchor = e.anchor, key = e.key, fuzzy = e.fuzzy }, { html = entry_html }),
+            }, {
+                definition = function() return Html.stripScripts(entry_html()) end,
+                word = function() return Lookup.headwordOf(entry_html()) or e.lookup_word end,
+            })
         end
         if failed then problems[#problems + 1] = { dict = d, state = failed } end
     end

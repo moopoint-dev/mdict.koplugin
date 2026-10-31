@@ -94,8 +94,9 @@ def block(data, compression="zlib", encrypt_payload=False):
 
 def write(path, entries, is_mdd=False, version="2.0", encoding="UTF-8", encrypt_index=True,
           compression="zlib", title="Test", header_extra=None, key_block_bytes=16384,
-          record_block_bytes=65536, sort=True, encrypt_record_blocks=False):
-    """entries: dict or list of (key, value); value is str (MDX) or bytes (MDD)."""
+          record_block_bytes=65536, sort=True, encrypt_record_blocks=False, record_order=None):
+    """entries: dict or list of (key, value); value is str (MDX) or bytes (MDD).
+    record_order: indexes into the (sorted) entries, the order their records are stored in."""
     items = list(entries.items()) if isinstance(entries, dict) else list(entries)
     if sort:
         items.sort(key=lambda kv: kv[0].lower())
@@ -119,10 +120,11 @@ def write(path, entries, is_mdd=False, version="2.0", encoding="UTF-8", encrypt_
                             " ".join('%s="%s"' % (k, esc(v)) for k, v in attrs.items()))
     hb = hdr.encode("utf-16-le") + b"\x00\x00"
 
-    recs, offsets, pos = [], [], 0
-    for _, v in items:
+    recs, offsets, pos = [], [0] * len(items), 0
+    for i in (record_order if record_order is not None else range(len(items))):
+        v = items[i][1]
         rb = v if is_mdd else v.encode(enc) + term
-        offsets.append(pos)
+        offsets[i] = pos
         recs.append(rb)
         pos += len(rb)
     rblocks, cur = [], b""
@@ -240,6 +242,20 @@ def fixtures(out):
     multi = [("bank", "<b>bank</b> (river)"), ("bank", "<b>bank</b> (money)"), ("Bank", "<b>Bank</b> (name)"),
              ("zz", "x" * 70000)]
     write(os.path.join(out, "multi.mdx"), multi, sort=False, title="Multi", record_block_bytes=1000)
+    # records stored in another order than their keys: the next key's record is not the next record
+    order = [("pitch", "<p>tar</p>"), ("pitch", "<p>field</p>"), ("pitcher", "<p>jug</p>")]
+    for enc in ("UTF-8", "UTF-16"):
+        write(os.path.join(out, "order-%s.mdx" % enc.lower()), order, sort=False, encoding=enc,
+              title="Record Order " + enc, record_order=[1, 0, 2], record_block_bytes=8)
+    # a page with every entry for a word under its plain key, and each entry again under its own
+    link = '<link rel="stylesheet" type="text/css" href="repeats.css">'
+    def unit(name, sense):
+        return ('<div class="entry"><span class="hw">%s</span><span class="sense">%s</span></div>'
+                % (name, (" " + sense) * 30))
+    season, coil = unit("spring", "the season after winter"), unit("spring", "a coil of metal")
+    repeats = [("spring", link + season + "<hr>" + link + coil + "\r\n"), ("\u3010spring\u3011", link + coil + "\r\n"),
+               ("sprint", link + unit("sprint", "a short fast race") + "\r\n")]
+    write(os.path.join(out, "repeats.mdx"), repeats, title="Repeats")
     print("fixtures written to", out)
 
 

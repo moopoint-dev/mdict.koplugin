@@ -21,6 +21,7 @@ local zlib = require("mdict/zlib")
 local band, bor, bxor, rshift, lshift = bit.band, bit.bor, bit.bxor, bit.rshift, bit.lshift
 
 pcall(ffi.cdef, "size_t strlen(const char *s);")
+pcall(ffi.cdef, "void *memchr(const void *s, int c, size_t n);")
 local C = ffi.C
 
 local Reader = {}
@@ -519,37 +520,46 @@ function Dict:_recordBlock(r)
     return blk
 end
 
+-- Index of the first record terminator in data[from, to): a NUL byte, or for UTF-16 two
+-- NULs at an even distance from `from`. Nil when there is none.
+local function terminator(data, from, to, utf16)
+    if from >= to then return nil end
+    if not utf16 then
+        local p = C.memchr(data + from, 0, to - from)
+        return p ~= nil and tonumber(ffi.cast("const uint8_t *", p) - data) or nil
+    end
+    for e = from, to - 2, 2 do
+        if data[e] == 0 and data[e + 1] == 0 then return e end
+    end
+end
+
 --- Raw bytes of the record data between decompressed offsets [off, off + size).
--- A nil size reads to the record's terminator (text dictionaries) or block end.
-function Dict:readRecordAt(off, size)
+-- With `text`, or without a size, the record ends at its terminator too. (The next key's
+-- record is not always the next record: keys need not be in the order of their records.)
+function Dict:readRecordAt(off, size, text)
     if off < 0 or off >= self.record_data_size then
         error("record offset out of range")
     end
     local parts = {}
     local remaining = size or math.huge
+    local read = 0
     local r = self:_recordBlockOf(off)
     while remaining > 0 and r < self.num_record_blocks do
         local blk = self:_recordBlock(r)
         local start = off - self.rb_doff[r]
-        local avail = blk.n - start
-        if not size then
-            -- scan for the terminator inside this block
-            local term = self.utf16 and 2 or 1
-            local e = start
-            if term == 1 then
-                while e < blk.n and blk.data[e] ~= 0 do e = e + 1 end
-            else
-                while e + 1 < blk.n and (blk.data[e] ~= 0 or blk.data[e + 1] ~= 0) do e = e + 2 end
-            end
-            parts[#parts + 1] = ffi.string(blk.data + start, e - start)
-            if e < blk.n then break end
-            off = self.rb_doff[r + 1]
-        else
-            local take = math.min(avail, remaining)
-            parts[#parts + 1] = ffi.string(blk.data + start, take)
-            remaining = remaining - take
-            off = off + take
+        local take = math.min(blk.n - start, remaining)
+        local e
+        if text or not size then
+            -- (UTF-16 units stay aligned to the record's start across blocks)
+            local from = start + (self.utf16 and read % 2 or 0)
+            e = terminator(blk.data, from, start + take, self.utf16)
+            if e then take = e - start end
         end
+        parts[#parts + 1] = ffi.string(blk.data + start, take)
+        if e then break end
+        remaining = remaining - take
+        read = read + take
+        off = off + take
         r = r + 1
     end
     return table.concat(parts)
@@ -572,12 +582,12 @@ function Dict:recordRange(ord)
     return off, nil
 end
 
---- Record for ordinal `ord`. Text dictionaries return UTF-8 with trailing NULs
--- removed; resource archives return the raw bytes.
+--- Record for ordinal `ord`. Text dictionaries return UTF-8 up to the record's
+-- terminator; resource archives return the raw bytes.
 function Dict:record(ord)
     local off, size = self:recordRange(ord)
     if not off then return nil end
-    local data = self:readRecordAt(off, size)
+    local data = self:readRecordAt(off, size, not self.is_mdd)
     if self.is_mdd then
         return data
     end

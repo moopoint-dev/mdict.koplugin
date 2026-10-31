@@ -63,4 +63,73 @@ describe("lookup", function()
             .. '<a href="entry://run#s1">run</a> <a HREF=\'sound://r.mp3\'>&#x1f50a;</a><img src="file://p.png"></p>',
             Html.stripScripts(html))
     end)
+    describe("repeated entries", function()
+        local L, HR, END = '<link rel="stylesheet" href="d.css">', "<hr>", "\r\n"
+        local function div(text) return '<div class="e"><span class="hw">' .. text .. '</span>'
+            .. string.rep(" " .. text, 40) .. '</div>' end
+        local U1, U2, U3, U4 = div("one"), div("two"), div("three"), div("four")
+        local function trim(...)
+            local entries = {}
+            for i, r in ipairs({ ... }) do entries[i] = type(r) == "table" and r or { key = "k" .. i, record = r } end
+            local out = {}
+            for i, e in ipairs(Lookup.trimRepeats(entries)) do out[i] = e.key .. "=" .. e.record end
+            return out
+        end
+
+        it("shows each entry of a dictionary once", function()
+            local fx = helper.fixtures()
+            local d = Dictionary.new({ path = fx .. "/repeats.mdx", cache_dir = helper.tmpdir("lk4"), title = "Repeats" })
+            local results = Lookup.run({ d }, { "spring" })
+            assert.equal(2, #results)
+            assert.equal("spring", results[1].mdict.key)
+            assert.matches("the season", results[1].mdict.html)
+            assert.is_nil(results[1].mdict.html:find("a coil", 1, true))
+            assert.is_nil(results[1].definition:find("<hr>", 1, true))
+            assert.equal("\u{3010}spring\u{3011}", results[2].mdict.key)
+            assert.matches("a coil", results[2].mdict.html)
+        end)
+
+        it("finds the entries of a record", function()
+            local r = L .. '<!-- c --> text <i>x</i><p>a<br/>b<script>if (a<b) {}</script></p>'
+                .. '<script>s()</script><img src="p.png"/>' .. HR .. L .. '<div>c < d</div>\r\n'
+            local got = {}
+            for i, u in ipairs(Lookup.entriesOf(r)) do got[i] = r:sub(u.from, u.to) end
+            assert.same({ "text", "<i>x</i>", '<p>a<br/>b<script>if (a<b) {}</script></p><script>s()</script>',
+                '<img src="p.png"/>', "<div>c < d</div>" }, got)
+        end)
+
+        it("cuts out of a page the entries that another result shows", function()
+            assert.same({ "k1=" .. L .. U1 .. END, "k2=" .. L .. U2 .. END },
+                trim(L .. U1 .. HR .. L .. U2 .. END, L .. U2 .. END))
+            assert.same({ "k1=" .. L .. U2 .. END, "k2=" .. L .. U1 .. HR .. L .. U3 .. END },
+                trim(L .. U2 .. END, L .. U1 .. HR .. L .. U2 .. HR .. L .. U3 .. END))
+            assert.same({ "k1=" .. L .. U2 .. END, "k2=" .. L .. U1 .. END },
+                trim(L .. U2 .. END, L .. U2 .. HR .. L .. U1 .. END))
+        end)
+
+        it("cuts entries that are apart or in another order", function()
+            assert.same({ "k1=" .. L .. U2 .. HR .. L .. U4 .. END, "k2=" .. L .. U3 .. HR .. L .. U1 .. END },
+                trim(L .. U1 .. HR .. L .. U2 .. HR .. L .. U3 .. HR .. L .. U4 .. END, L .. U3 .. HR .. L .. U1 .. END))
+            -- an entry's own script goes with it
+            local S = "<script>v()</script>"
+            assert.same({ "k1=" .. L .. U1 .. S .. END, "k2=" .. L .. U2 .. S },
+                trim(L .. U1 .. S .. HR .. L .. U2 .. S .. END, L .. U2 .. S))
+        end)
+
+        it("drops a page whose entries are all shown, and a repeat of an earlier result", function()
+            assert.same({ "k2=" .. U1, "k3=" .. U2 }, trim(U1 .. HR .. U2, U1, U2))
+            assert.same({ "k1=" .. L .. U1 }, trim(L .. U1, '<link rel="stylesheet" href="other.css">' .. U1))
+            -- shared by two pages as long: the first keeps it
+            assert.same({ "k1=" .. U1 .. HR .. U2, "k2=" .. U3 }, trim(U1 .. HR .. U2, U2 .. HR .. U3))
+        end)
+
+        it("leaves alone short entries, others' entries and pages a link points into", function()
+            assert.same({ "k1=<b>x</b> one <i>two</i>", "k2=<i>two</i>" }, trim("<b>x</b> one <i>two</i>", "<i>two</i>"))
+            assert.same({ "k1=" .. U1 .. U3, "k2=" .. U2 }, trim(U1 .. U3, U2))
+            local U2a = U2:gsub('class="e"', 'class="e" id="s2"')
+            assert.same({ "k1=" .. U1 .. HR .. U2a, "k2=" .. U2a },
+                trim({ key = "k1", record = U1 .. HR .. U2a, anchor = "s2" }, U2a))
+            assert.same({ "k1=" .. U1, "k2=" .. U2a }, trim({ key = "k1", record = U1 .. HR .. U2a, anchor = "s1" }, U2a))
+        end)
+    end)
 end)
