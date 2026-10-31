@@ -11,6 +11,7 @@ order is not trusted for searching (see mdict/index.lua).
 ]]
 
 local bit = require("bit")
+local clock = require("mdict/clock")
 local ffi = require("ffi")
 local fileio = require("mdict/fileio")
 local lzo = require("mdict/lzo")
@@ -23,6 +24,9 @@ pcall(ffi.cdef, "size_t strlen(const char *s);")
 local C = ffi.C
 
 local Reader = {}
+
+--- Blocks decoded for lookups (cache misses), for timings in the log; callers reset it.
+Reader.stats = { key_blocks = 0, record_blocks = 0, bytes = 0, seconds = 0 }
 
 ---------------------------------------------------------------- helpers
 
@@ -165,7 +169,9 @@ local function decode_block(p, len, dlen)
     else
         error("unknown block compression " .. comp)
     end
-    if zlib.adler32(out, olen) ~= checksum then
+    -- zlib checks its stream's own Adler-32 of the same bytes, and KOReader's zlib has no
+    -- adler32() for us, so only the other kinds are summed here (in Lua)
+    if comp ~= 2 and zlib.adler32(out, olen) ~= checksum then
         error("block checksum mismatch")
     end
     return out, olen
@@ -444,8 +450,12 @@ end
 function Dict:keyBlock(b)
     local kb = self.kb_cache:get(b)
     if not kb then
+        local t0 = clock()
         kb = self:_decodeKeyBlock(b)
         self.kb_cache:put(b, kb)
+        local st = Reader.stats
+        st.key_blocks, st.bytes = st.key_blocks + 1, st.bytes + self.kb_dlen[b]
+        st.seconds = st.seconds + clock() - t0
     end
     return kb
 end
@@ -495,12 +505,16 @@ end
 function Dict:_recordBlock(r)
     local blk = self.rb_cache:get(r)
     if not blk then
+        local t0 = clock()
         local clen = self.rb_fpos[r + 1] - self.rb_fpos[r]
         local dlen = self.rb_doff[r + 1] - self.rb_doff[r]
         local raw = self.file:read(self.rb_fpos[r], clen)
         local data, n = decode_block(raw, clen, dlen)
         blk = { data = data, n = n }
         self.rb_cache:put(r, blk, n)
+        local st = Reader.stats
+        st.record_blocks, st.bytes = st.record_blocks + 1, st.bytes + n
+        st.seconds = st.seconds + clock() - t0
     end
     return blk
 end
@@ -570,7 +584,10 @@ function Dict:record(ord)
     if self.utf16 then
         data = utf16le_to_utf8(ffi.cast("const uint8_t *", data), #data)
     end
-    return (data:gsub("%z+$", ""))
+    -- (records end in NULs: a gsub would try its pattern at every byte of a large entry)
+    local n = #data
+    while n > 0 and data:byte(n) == 0 do n = n - 1 end
+    return n < #data and data:sub(1, n) or data
 end
 
 function Dict:clearCaches()

@@ -158,13 +158,17 @@ function Integration.startSdcv(orig, rd, word, dict_names, fuzzy_search)
         if not has_cjk(w) then all_cjk = false end
     end
     local display = Integration.pending_display and Integration.pending_display[word]
+    local st = require("mdict/reader").stats
+    st.key_blocks, st.record_blocks, st.bytes, st.seconds = 0, 0, 0, 0
     local t0, c0 = clock(), os.clock()
     local mres, problems = Lookup.run(targets, words, { fuzzy = fuzzy_search and not all_cjk, display_word = display })
     if #mres == 0 and #problems == 0 and all_cjk then
         mres, problems = Integration.prefixLookup(targets, word, display)
     end
-    require("logger").info(string.format("MDict: looked up in %d dictionaries: %d results in %.0f ms (%.0f ms CPU);"
-        .. " other dictionaries %.0f ms", #targets, #mres, (clock() - t0) * 1000, (os.clock() - c0) * 1000, t_sdcv * 1000))
+    require("logger").info(string.format("MDict: looked up in %d dictionaries: %d results in %.0f ms (%.0f ms CPU),"
+        .. " %d key and %d record blocks (%.0f KB) decoded in %.0f ms; other dictionaries %.0f ms",
+        #targets, #mres, (clock() - t0) * 1000, (os.clock() - c0) * 1000,
+        st.key_blocks, st.record_blocks, st.bytes / 1024, st.seconds * 1000, t_sdcv * 1000))
     for __, p in ipairs(problems) do
         local text
         if p.state == "indexing" then

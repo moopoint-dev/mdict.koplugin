@@ -59,10 +59,41 @@ local function attr(tag, name)
 end
 Html.attr = attr
 
+--- Like html:gsub(pattern, fn), for a pattern that matches only where the lowercase text
+-- `word` begins `back` bytes after the match. A pattern that may start anywhere costs a
+-- match attempt at every byte, which adds up in entries of a few hundred KB.
+local function gsub_at(html, word, back, pattern, fn)
+    local lower = html:lower()
+    local i = lower:find(word, back + 1, true)
+    if not i then return html end
+    local out, last = {}, 1
+    pattern = "^" .. pattern
+    while i do
+        local s = i - back
+        local caps = { html:find(pattern, s) }
+        if caps[1] then
+            local e = caps[2]
+            local repl = fn(unpack(caps, 3))
+            if repl then
+                out[#out + 1] = html:sub(last, s - 1)
+                out[#out + 1] = repl
+                last = e + 1
+            end
+            i = lower:find(word, e + 1 + back, true)
+        else
+            i = lower:find(word, i + 1, true)
+        end
+    end
+    if last == 1 then return html end
+    out[#out + 1] = html:sub(last)
+    return table.concat(out)
+end
+Html._gsub_at = gsub_at
+
 --- Removes <link rel="stylesheet"> tags. Returns the HTML and the unique hrefs in order.
 function Html.extractStylesheets(html)
     local hrefs, seen = {}, {}
-    html = html:gsub("<[Ll][Ii][Nn][Kk]%s[^>]*>", function(tag)
+    html = gsub_at(html, "<link", 0, "(<[Ll][Ii][Nn][Kk]%s[^>]*>)", function(tag)
         local rel = (attr(tag, "rel") or ""):lower()
         if rel:find("stylesheet", 1, true) then
             local href = attr(tag, "href")
@@ -81,7 +112,7 @@ end
 --   sound://path        -> mdict-sound://path   (handled by the plugin)
 --   file://path         -> path                 (relative resource)
 function Html.rewriteLinks(html)
-    html = html:gsub("(%s[Hh][Rr][Ee][Ff]%s*=%s*)([\"'])([%a][%w+.-]*):(/?/?)", function(pre, q, scheme, slashes)
+    html = gsub_at(html, "href", 1, "(%s[Hh][Rr][Ee][Ff]%s*=%s*)([\"'])([%a][%w+.-]*):(/?/?)", function(pre, q, scheme)
         local s = scheme:lower()
         if s == "entry" then
             return pre .. q .. "bword://"
@@ -91,13 +122,17 @@ function Html.rewriteLinks(html)
             return pre .. q
         end
     end)
-    html = html:gsub("(%s[Ss][Rr][Cc]%s*=%s*)([\"'])[Ff][Ii][Ll][Ee]://", "%1%2")
+    html = gsub_at(html, "src", 1, "(%s[Ss][Rr][Cc]%s*=%s*)([\"'])[Ff][Ii][Ll][Ee]://", function(pre, q)
+        return pre .. q
+    end)
     return html
 end
 
+local function nothing() return "" end
+
 function Html.stripScripts(html)
-    html = html:gsub("<[Ss][Cc][Rr][Ii][Pp][Tt][^>]*>.-</[Ss][Cc][Rr][Ii][Pp][Tt]%s*>", "")
-    html = html:gsub("<[Ss][Cc][Rr][Ii][Pp][Tt][^>]*/>", "")
+    html = gsub_at(html, "<script", 0, "(<[Ss][Cc][Rr][Ii][Pp][Tt][^>]*>.-</[Ss][Cc][Rr][Ii][Pp][Tt]%s*>)", nothing)
+    html = gsub_at(html, "<script", 0, "(<[Ss][Cc][Rr][Ii][Pp][Tt][^>]*/>)", nothing)
     return html
 end
 

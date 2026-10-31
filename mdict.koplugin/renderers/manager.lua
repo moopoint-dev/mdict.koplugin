@@ -202,13 +202,16 @@ function Manager.widget(state, dql, r, opts)
     local writing = Manager.dictSetting(settings, d.id, "writing", "auto")
     local vertical_hint = writing == "vertical"
     if writing == "auto" then vertical_hint = vertical_seen(settings, d.id) or false end
+    local clock = require("renderers/webview").clock
+    local t_html = clock()
     local stylesheets, body = d:stylesheetsOf(r.mdict.html)
+    local query = appended(dql, r, opts.definition)
     local Device = require("device")
     local eink = settings.eink
     if eink == nil then eink = Device:hasEinkScreen() end
     local WebScrollWidget = require("widgets/webscrollwidget")
-    local clock = require("renderers/webview").clock
     local t0 = clock()
+    t_html = t0 - t_html
     local widget, err = WebScrollWidget.create{
         renderer = renderer,
         doc = {
@@ -221,7 +224,7 @@ function Manager.widget(state, dql, r, opts)
             user_css = d:userCss(),
         },
         entry = {
-            html = body .. '<div class="mdict-query">' .. appended(dql, r, opts.definition) .. "</div>",
+            html = body .. '<div class="mdict-query">' .. query .. "</div>",
             anchor = r.mdict.anchor,
             zoom = ((dql.dict_font_size or 20) / 20) * (settings.zoom or 1),
             eink = eink,
@@ -246,8 +249,9 @@ function Manager.widget(state, dql, r, opts)
             if dql.shw_widget then dql.shw_widget:setTapScrollEnabled(true) end
         end,
     }
-    logger.dbg("MDict: laid out", r.mdict.key, string.format("in %.0f ms", (clock() - t0) * 1000),
-        widget and widget.htmlbox_widget.page_count or 0, "pages")
+    logger.info(string.format("MDict: laid out %s (%.0f KB, prepared in %.0f ms) in %.0f ms: %d pages",
+        r.mdict.key, #r.mdict.html / 1024, t_html * 1000, (clock() - t0) * 1000,
+        widget and widget.htmlbox_widget.page_count or 0))
     if not widget then
         if opts.background then return nil, err end
         logger.warn("MDict: WebView could not show the entry:", err)
