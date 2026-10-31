@@ -107,23 +107,74 @@
     })), ms);
   }
 
-  // Scroll containers are monolithic in multi-column layout: an entry root with
-  // overflow:auto would be clipped to one page. Make them fragmentable while
-  // keeping clipping where the entry asked for it.
+  // Lets multi-column layout break the entry where a reader would expect.
+  //  - Scroll containers are monolithic: an entry root with overflow:auto would be
+  //    clipped to one page. Make them fragmentable while keeping clipping where the
+  //    entry asked for it.
+  //  - An inline element holding blocks (a span around a definition and its examples)
+  //    is split around them, and the layout then only breaks before the whole run of
+  //    blocks: an entry a little taller than the page moved all of it to the next
+  //    page. Such an element is left out of the layout (display: contents), so its
+  //    blocks break like any others and its text stays on the lines it was on; not
+  //    links, and not elements that draw something of their own.
   var CLIP = (window.CSS && CSS.supports && CSS.supports("overflow", "clip")) ? "clip" : "visible";
-  function unscroll(zoom) {
-    var all = zoom.getElementsByTagName("*");
+  var BLOCK_LEVEL = { block: 1, "flow-root": 1, "list-item": 1, table: 1, flex: 1, grid: 1 };
+  var CONTENTS = "data-mdict-contents";
+  function fragmentable(zoom) {
+    var all = zoom.getElementsByTagName("*"), styles = new Map(), unwrap = new Set(), fixes = [];
+    function style(e) {
+      var cs = styles.get(e);
+      if (!cs) styles.set(e, cs = getComputedStyle(e));
+      return cs;
+    }
+    var fix = function (o) { return o === "auto" || o === "scroll" ? "visible" : o === "hidden" ? CLIP : o; };
+    // reads every style first: a write in between would make each read lay out again
     for (var i = 0; i < all.length; i++) {
-      var e = all[i], cs = getComputedStyle(e);
+      var e = all[i], cs = style(e);
+      if (BLOCK_LEVEL[cs.display] && cs.float === "none" && cs.position !== "absolute" && cs.position !== "fixed") {
+        for (var p = e.parentElement; p && p !== zoom && !unwrap.has(p); p = p.parentElement) {
+          var ps = style(p);
+          if (ps.display !== "inline" || !plainInline(p, ps, style(p.parentElement))) break;
+          unwrap.add(p);
+        }
+      }
       var ox = cs.overflowX, oy = cs.overflowY;
       if (ox === "visible" && oy === "visible" || ox === "clip" && oy === "clip") continue;
-      var fix = function (o) { return o === "auto" || o === "scroll" ? "visible" : o === "hidden" ? CLIP : o; };
-      e.style.setProperty("overflow-x", fix(ox), "important");
-      e.style.setProperty("overflow-y", fix(oy), "important");
       // overflow other than visible made it a block formatting context (contains floats)
-      if (cs.display === "block") e.style.setProperty("display", "flow-root", "important");
+      fixes.push([e, fix(ox), fix(oy), cs.display === "block"]);
+    }
+    unwrap.forEach(function (u) {
+      u.setAttribute(CONTENTS, "");
+      u.style.setProperty("display", "contents", "important");
+    });
+    for (var k = 0; k < fixes.length; k++) {
+      var f = fixes[k];
+      f[0].style.setProperty("overflow-x", f[1], "important");
+      f[0].style.setProperty("overflow-y", f[2], "important");
+      if (f[3]) f[0].style.setProperty("display", "flow-root", "important");
     }
   }
+
+  // An inline element that is only a container for its text: nothing it draws or
+  // sets for itself alone (as opposed to what its content inherits) is lost when it
+  // is left out of the layout.
+  function plainInline(e, cs, parent) {
+    if (e.tagName === "A" || ATOMIC[e.tagName]) return false;
+    if (cs.position !== "static" || cs.verticalAlign !== "baseline" || cs.unicodeBidi !== "normal") return false;
+    if (cs.writingMode !== parent.writingMode || cs.textCombineUpright && cs.textCombineUpright !== "none") return false;
+    if (cs.textDecorationLine !== "none" || cs.backgroundImage !== "none" || !clear(cs.backgroundColor)) return false;
+    if (cs.boxShadow !== "none" || cs.outlineStyle !== "none" || cs.opacity !== "1") return false;
+    if (cs.transform !== "none" || cs.filter !== "none" || cs.clipPath !== "none") return false;
+    if (cs.counterReset !== "none" || cs.counterIncrement !== "none") return false;
+    var sides = ["Top", "Right", "Bottom", "Left"];
+    for (var i = 0; i < 4; i++) {
+      var s = sides[i];
+      if (parseFloat(cs["border" + s + "Width"]) || parseFloat(cs["padding" + s]) || parseFloat(cs["margin" + s])) return false;
+    }
+    return true;
+  }
+
+  function clear(color) { return color === "transparent" || /,\s*0\)$/.test(color); }
 
   // Detects vertical writing from what the entry's own CSS computes for its
   // main content, before the pager's axis is chosen.
@@ -157,6 +208,8 @@
   // sections: it still reports boxes, at positions that mean nothing.
   function shown(node) {
     var e = node.nodeType === 1 ? node : node.parentElement;
+    // an element left out of the layout has no box of its own to check
+    while (e && e.hasAttribute(CONTENTS)) e = e.parentElement;
     if (!e) return false;
     if (e.checkVisibility) return e.checkVisibility();
     for (var n = e; n; n = n.parentElement) {
@@ -567,23 +620,32 @@
     };
   }
 
+  // Waits for the fonts the entry's text needs. A font starts loading when laying out
+  // text first needs it: lay out, and wait again until laying out asks for no more.
+  // Not with document.fonts.ready, which only settles after the page next renders: on
+  // e-readers the WebView can go seconds without rendering.
+  async function fontsLoaded(zoom, ms) {
+    if (!document.fonts || !document.fonts.forEach) return;
+    var deadline = Date.now() + ms;
+    for (var i = 0; i < 5; i++) {
+      void zoom.offsetHeight;
+      var loading = [];
+      document.fonts.forEach(function (f) {
+        if (f.status === "loading") loading.push(f.loaded.catch(function () {}));
+      });
+      if (!loading.length || Date.now() >= deadline) return;
+      await withTimeout(Promise.all(loading), Math.max(0, deadline - Date.now()));
+    }
+  }
+
   async function settleLayout(opts, t) {
     var zoom = el("mdict-zoom");
     t = t || { mark: function () {} };
-    unscroll(zoom);
-    t.mark("unscroll");
+    fragmentable(zoom);
+    t.mark("fragmentable");
     await waitForImages(zoom, opts.imageTimeout || 1500);
     t.mark("images");
-    if (document.fonts && document.fonts.ready) {
-      var deadline = Date.now() + (opts.fontTimeout || 2000);
-      // a font starts loading when laying out text first needs it: lay out, and wait
-      // again until laying out asks for no more fonts
-      for (var i = 0; i < 5; i++) {
-        await withTimeout(document.fonts.ready, Math.max(0, deadline - Date.now()));
-        void zoom.offsetHeight;
-        if (document.fonts.status !== "loading" || Date.now() >= deadline) break;
-      }
-    }
+    await fontsLoaded(zoom, opts.fontTimeout || 2000);
     t.mark("fonts");
     layout(state.pagination);
     t.mark("layout");

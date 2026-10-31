@@ -281,6 +281,43 @@ describe("WebView widgets", function()
         w:free()
     end)
 
+    it("breaks between the blocks of an inline element that holds them", function()
+        -- a sense group as one dictionary marks it up: the headword line and the
+        -- definition with its examples in one span, in an entry with bottom padding
+        local function sense(examples)
+            local x = {}
+            for i = 1, examples do x[i] = '<div id="x' .. i .. '">an example of the word in use</div>' end
+            return '<div style="padding-bottom:60px"><a href="#top">*</a><span class="g">'
+                .. '<span>headword</span> /prəˌnʌnsiˈeɪʃən/ verb '
+                .. '<span id="d" style="display:block">the definition of the word</span>'
+                .. table.concat(x) .. "</span></div>"
+        end
+        local split = 0
+        for examples = 8, 22 do
+            local w = widget_for(sense(examples))
+            local box = w.htmlbox_widget
+            if box.page_count > 1 then
+                -- the definition stays with the headword, and only the examples that
+                -- do not fit go to the next page
+                assert.equal(0, renderer:pageOfAnchor(box.slot, "d").page)
+                if renderer:pageOfAnchor(box.slot, "x" .. examples).page == 1
+                    and renderer:pageOfAnchor(box.slot, "x1").page == 0 then
+                    split = split + 1
+                end
+            end
+            w:free()
+        end
+        assert.is_true(split > 0)
+        -- the headword stays on the line it shares with the link before it
+        local w = widget_for(sense(2))
+        local box = w.htmlbox_widget
+        local link = box:_links()[1]
+        assert.is_true(box:findText("headword"))
+        local head = box._search_index[1][1]
+        assert.is_true(head.y < link.y1 and head.y + head.h > link.y0)
+        w:free()
+    end)
+
     it("builds popup widgets through the manager", function()
         local Manager = require("renderers/manager")
         local Library = require("mdict/library")
