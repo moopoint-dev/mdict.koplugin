@@ -2,6 +2,8 @@ package org.koreader.mdict;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.ComponentCallbacks2;
+import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -12,6 +14,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
+import android.view.Choreographer;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.JavascriptInterface;
@@ -66,6 +69,10 @@ public final class HtmlRenderer {
     // after this at the latest. On e-readers a frame can take a third of a second, and
     // a few seconds after a large picture viewer closes.
     private static final int CAPTURE_WAIT_MS = 3000;
+    // A slot whose capture waited longer than this gets a new WebView with its next
+    // document: on e-readers, captures got slower each time KOReader had been in the
+    // background (2 to 3 s after ten minutes), while a new process was fast.
+    private static final int SLOW_CAPTURE_MS = 1500;
 
     private final Activity activity;
     private final Handler ui;
@@ -87,6 +94,7 @@ public final class HtmlRenderer {
         volatile File cacheRoot;
         volatile Map<String, File> files = new HashMap<String, File>();
         final ConcurrentHashMap<Integer, String> args = new ConcurrentHashMap<Integer, String>();
+        volatile boolean slow; // a capture waited long: the next document gets a new WebView
 
         Slot(int id) { this.id = id; }
     }
@@ -94,6 +102,12 @@ public final class HtmlRenderer {
     public HtmlRenderer(Activity activity) {
         this.activity = activity;
         this.ui = new Handler(Looper.getMainLooper());
+        // for the log: WebViews release memory when the system asks for it
+        activity.registerComponentCallbacks(new ComponentCallbacks2() {
+            @Override public void onTrimMemory(int level) { Log.i(TAG, "trim memory " + level); }
+            @Override public void onLowMemory() { Log.i(TAG, "low memory"); }
+            @Override public void onConfigurationChanged(Configuration c) { }
+        });
     }
 
     /** 2: playAudio/stopAudio. */
@@ -171,6 +185,23 @@ public final class HtmlRenderer {
         v.layout(0, 0, width, height);
     }
 
+    /** Replaces the slot's WebView with a new one of the same size. (UI thread only) */
+    private void renew(Slot s) {
+        long t = SystemClock.uptimeMillis();
+        s.slow = false;
+        WebView old = s.view;
+        ViewGroup.LayoutParams lp = old.getLayoutParams();
+        int width = lp.width, height = lp.height;
+        ViewGroup parent = (ViewGroup) old.getParent();
+        if (parent != null) parent.removeView(old);
+        old.stopLoading();
+        old.destroy();
+        s.view = createView(s);
+        activity.addContentView(s.view, new ViewGroup.LayoutParams(width, height));
+        layout(s.view, width, height);
+        Log.i(TAG, "slot " + s.id + ": new WebView in " + (SystemClock.uptimeMillis() - t) + " ms");
+    }
+
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
     private WebView createView(final Slot s) {
         WebView v = new WebView(activity);
@@ -213,6 +244,7 @@ public final class HtmlRenderer {
                 Slot s = slots.get(slot);
                 if (s == null) { emitError(slot, new IllegalStateException("no such slot")); return; }
                 try {
+                    if (s.slow) renew(s);
                     s.host = URI.create(base).getHost();
                     s.cacheRoot = new File(root);
                     Map<String, File> map = new HashMap<String, File>();
@@ -253,12 +285,19 @@ public final class HtmlRenderer {
 
     /** Draws the slot's current state into dst (RGBA, width*4 bytes per row). */
     public void capture(final int slot, final int id, final ByteBuffer dst, final int width, final int height) {
+        final long asked = SystemClock.uptimeMillis();
         ui.post(new Runnable() {
             @Override public void run() {
                 final Slot s = slots.get(slot);
-                if (s == null) { emitCaptured(slot, id, false, 0, 0, "none"); return; }
+                if (s == null) { emitCaptured(slot, id, false, 0, 0, "none", false); return; }
                 final long start = SystemClock.uptimeMillis();
                 final boolean[] fired = {false};
+                // for the log: when the UI thread got to it, and when the next vsync came
+                final long queued = start - asked;
+                final long[] vsync = {-1};
+                Choreographer.getInstance().postFrameCallback(new Choreographer.FrameCallback() {
+                    @Override public void doFrame(long frameTimeNanos) { vsync[0] = SystemClock.uptimeMillis() - start; }
+                });
                 final class Draw implements Runnable {
                     final String via;
                     Draw(String via) { this.via = via; }
@@ -269,7 +308,12 @@ public final class HtmlRenderer {
                         long t = SystemClock.uptimeMillis();
                         boolean ok = drawInto(s, dst, width, height);
                         long done = SystemClock.uptimeMillis();
-                        emitCaptured(slot, id, ok, t - start, done - t, via);
+                        if (t - start > SLOW_CAPTURE_MS && !s.slow) {
+                            s.slow = true;
+                            Log.i(TAG, "slot " + slot + ": capture waited " + (t - start) + " ms: new WebView with the next document");
+                        }
+                        Log.d(TAG, "capture " + id + ": queued " + queued + " ms, vsync " + vsync[0] + " ms");
+                        emitCaptured(slot, id, ok, t - start, done - t, via, s.slow);
                     }
                 }
                 if (Build.VERSION.SDK_INT >= 23) {
@@ -314,10 +358,11 @@ public final class HtmlRenderer {
         }
     }
 
-    private void emitCaptured(int slot, int id, boolean ok, long waitMs, long drawMs, String via) {
+    private void emitCaptured(int slot, int id, boolean ok, long waitMs, long drawMs, String via, boolean renew) {
         Log.d(TAG, "capture " + id + ": waited " + waitMs + " ms (" + via + "), drew in " + drawMs + " ms");
         emit("{\"ev\":\"captured\",\"slot\":" + slot + ",\"id\":" + id + ",\"ok\":" + ok
-                + ",\"wait\":" + waitMs + ",\"draw\":" + drawMs + ",\"via\":\"" + via + "\"}");
+                + ",\"wait\":" + waitMs + ",\"draw\":" + drawMs + ",\"via\":\"" + via + "\""
+                + (renew ? ",\"renew\":true" : "") + "}");
     }
 
     /** Answers a "need" event: the file now in the cache, or null/empty if there is none. */

@@ -262,6 +262,8 @@ end
 -- laying out the next result ahead ------------------------------------------------
 
 Manager.PREFETCH_DELAY = 0.3 -- seconds after a result is shown
+-- after a popup opens, so that the popup's own first refresh comes first
+Manager.FIRST_PREFETCH_DELAY = 1
 
 --- Frees the result laid out ahead for a popup, and stops laying it out.
 function Manager.dropPrefetch(dql)
@@ -303,6 +305,7 @@ function Manager.prefetch(state, dql)
     local settings = state.settings or {}
     if settings.prefetch == false or settings.renderer == "mupdf" then return end
     local last = dql.mdict_last_index
+    local delay = last and Manager.PREFETCH_DELAY or Manager.FIRST_PREFETCH_DELAY
     dql.mdict_last_index = dql.dict_index
     local step = (last and dql.dict_index < last) and -1 or 1
     local index = dql.dict_index + step
@@ -336,7 +339,7 @@ function Manager.prefetch(state, dql)
         if not w and job.err and job.err ~= renderer.CANCELLED then
             logger.dbg("MDict: could not lay out the next result ahead:", job.err)
         end
-    end, Manager.PREFETCH_DELAY)
+    end, delay)
 end
 
 return Manager

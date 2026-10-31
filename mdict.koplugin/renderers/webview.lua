@@ -298,7 +298,8 @@ function WebRenderer:document(doc, w, h, avoid)
         slot.w, slot.h = w, h
         slot.trace.open = ms(t)
     end
-    if not (cached and slot.ready) then
+    -- renew: the WebView asked for its document again, to load it into a new WebView
+    if not (cached and slot.ready and not slot.renew) then
         local t = monotonic()
         slot.dict_id = doc.dict_id
         slot.ready = false
@@ -311,7 +312,7 @@ function WebRenderer:document(doc, w, h, avoid)
             slot.key = nil
             return nil, "load: " .. tostring(err)
         end
-        slot.ready = true
+        slot.ready, slot.renew = true, nil
         slot.trace.load = ms(t)
     end
     -- the viewport must have the requested size before laying out an entry
@@ -372,6 +373,7 @@ function WebRenderer:renderPage(slot, n, ptr)
     local ev, err = self:_wait(function(e) return e.ev == "captured" and e.id == id end, WebRenderer.CAPTURE_TIMEOUT)
     if not ev then return nil, err end
     if not ev.ok then return nil, "capture failed" end
+    if ev.renew then slot.renew = true end
     timing.capture, timing.wait, timing.draw, timing.via = ms(t), ev.wait, ev.draw, ev.via
     return true, nil, timing
 end

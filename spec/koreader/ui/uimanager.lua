@@ -1,6 +1,10 @@
--- Stub of KOReader's UIManager for widget specs: records scheduled tasks and dirty regions
-local UIManager = { tasks = {}, dirty = {} }
-function UIManager:scheduleIn(_, fn) table.insert(self.tasks, fn) end
+-- Stub of KOReader's UIManager for widget specs: records scheduled tasks (and the delay
+-- of each) and dirty regions
+local UIManager = { tasks = {}, dirty = {}, delays = setmetatable({}, { __mode = "k" }) }
+function UIManager:scheduleIn(seconds, fn)
+    self.delays[fn] = seconds
+    table.insert(self.tasks, fn)
+end
 function UIManager:nextTick(fn) table.insert(self.tasks, fn) end
 function UIManager:unschedule(fn)
     for i = #self.tasks, 1, -1 do if self.tasks[i] == fn then table.remove(self.tasks, i) end end

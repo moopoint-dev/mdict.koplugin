@@ -383,6 +383,8 @@ describe("WebView widgets", function()
         local p = assert(dql.mdict_prefetch)
         assert.equal(2, p.index)
         assert.is_falsy(p.job.done) -- nothing happens before the scheduler runs it
+        -- the popup has just opened: its first refresh comes first
+        assert.equal(Manager.FIRST_PREFETCH_DELAY, UIManager.delays[p.job.step])
         local job = p.job
         settle(p)
         local ahead = assert(p.widget, tostring(job.ok) .. " " .. tostring(job.err))
@@ -405,6 +407,7 @@ describe("WebView widgets", function()
         Manager.prefetch(state, dql)
         local p2 = assert(dql.mdict_prefetch)
         assert.equal(3, p2.index)
+        assert.equal(Manager.PREFETCH_DELAY, UIManager.delays[p2.job.step])
         settle(p2)
         local box2 = assert(p2.widget).htmlbox_widget
         assert.are_not.equal(box.slot.id, box2.slot.id)

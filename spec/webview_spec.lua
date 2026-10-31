@@ -31,7 +31,10 @@ local function fake_bridge()
         local p = b.pending
         push({ ev = "done", slot = p.slot, id = p.id, r = { pages = 3, vertical = false, anchorPage = -1 } })
     end
-    function b.capture(_, slot, id, ptr) ptr[0] = 42; push({ ev = "captured", slot = slot, id = id, ok = true }) end
+    function b.capture(_, slot, id, ptr)
+        ptr[0] = 42
+        push({ ev = "captured", slot = slot, id = id, ok = true, renew = b.renew })
+    end
     function b.poll()
         b.polls = b.polls + 1
         local e = b.queue[1]
@@ -88,6 +91,15 @@ describe("webview renderer", function()
         local e = assert(wr:document({ dict_id = "e", cache_root = "/c", stylesheets = {} }, 1150, 1100,
             { [c.id] = true }))
         assert.are_not.equal(c.id, e.id)
+        assert.equal(4, loads)
+        -- a WebView that captured slowly asks for its document again (to load it into a new one)
+        bridge.renew = true
+        assert.is_true(wr:renderPage(e, 0, require("ffi").new("uint8_t[4]")))
+        bridge.renew = nil
+        assert.equal(e, assert(wr:document({ dict_id = "e", cache_root = "/c", stylesheets = {} }, 1150, 1100)))
+        assert.equal(5, loads)
+        assert(wr:document({ dict_id = "e", cache_root = "/c", stylesheets = {} }, 1150, 1100))
+        assert.equal(5, loads)
     end)
 
     -- a scheduler run by hand: run() does one round of the scheduled functions
