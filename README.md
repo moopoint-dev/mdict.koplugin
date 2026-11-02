@@ -6,6 +6,39 @@ laid out by the system WebView (Chromium) and shown a page at a time, so
 complex dictionary layouts keep their original look, including vertical
 Japanese. Elsewhere, entries fall back to KOReader's built-in HTML renderer.
 
+## Screenshots
+
+Taken on the Android emulator in `tools/emulator/` (7", 300 ppi). Pinching out
+on the popup switches KOReader to its large dictionary window. In the GIFs,
+grey circles mark the touches.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/media/oxford-ec-rabbit.png" alt="The entry for rabbit in the Oxford English-Chinese dictionary, with its illustration, in KOReader's dictionary popup"></td>
+<td width="50%"><img src="docs/media/gendai-ko-stroke-order.png" alt="The kanji entry for 故 in vertical text, with a stroke-order column, ruby and upright numbers"></td>
+</tr>
+<tr>
+<td>Horizontal: <i>rabbit</i> in an English-Chinese dictionary, with its illustration.</td>
+<td>Vertical: the kanji 故, with stroke order, ruby and upright numbers (tate-chu-yoko).</td>
+</tr>
+<tr>
+<td><img src="docs/media/daijisen-sokyokusen.png" alt="The entry for 双曲線 (hyperbola) in horizontal Japanese, with accent marks, audio buttons and a color diagram"></td>
+<td><img src="docs/media/gendai-sokyokusen.png" alt="The entry for 双曲線 (hyperbola) in vertical Japanese, with two drawings of hyperbolas"></td>
+</tr>
+<tr>
+<td>Horizontal Japanese: 双曲線, with accent marks, audio buttons and a diagram.</td>
+<td>Vertical Japanese: 双曲線, with its figures.</td>
+</tr>
+<tr>
+<td><img src="docs/media/pagination-vertical-inu.gif" alt="Looking up 犬: pinching out to the large window, turning pages, and swiping through results from three dictionaries"></td>
+<td><img src="docs/media/pagination-horizontal-watch.gif" alt="Looking up watch: pinching out to the large window, opening and closing a folded section, turning pages, and opening an illustration"></td>
+</tr>
+<tr>
+<td>犬: pages and results, from vertical entries to a horizontal one.</td>
+<td><i>watch</i>: a folded section, pages, the next result, and a full-size illustration.</td>
+</tr>
+</table>
+
 ## Install
 
 1. Unzip a release zip (`mdict.koplugin-<version>.zip`) into `koreader/plugins/`.
