@@ -4,7 +4,42 @@ MDict (.mdx/.mdd) dictionaries for KOReader, shown in KOReader's own
 dictionary popup next to its StarDict dictionaries. On Android, entries are
 laid out by the system WebView (Chromium) and shown a page at a time, so
 complex dictionary layouts keep their original look, including vertical
-Japanese. Elsewhere, entries fall back to KOReader's built-in HTML renderer.
+Japanese, and their scripts and audio work. Elsewhere, entries fall back to
+KOReader's built-in HTML renderer.
+
+## Why
+
+KOReader looks words up in StarDict dictionaries only, and lays out HTML
+definitions with MuPDF. MuPDF is a document renderer rather than a browser:
+
+- It supports part of CSS only (no flexbox or grid), so many modern dictionary
+  layouts fall apart.
+- It has no vertical text (`writing-mode: vertical-rl`), so Japanese dictionaries
+  that are set vertically show horizontally.
+- It runs no JavaScript: collapsed sections stay closed and images can't be
+  opened full size.
+- KOReader plays no audio, so pronunciations and example recordings are dead links.
+
+The usual ways around this have their own costs. Converting MDict files to
+StarDict (for example with PyGlossary) drops the audio and the scripts, needs
+the CSS copied by hand, and has to be redone whenever the dictionary changes.
+Sending lookups to an external app (GoldenDict, Eudic, DictTango and others)
+leaves KOReader on every lookup, which on e-ink means several full-screen
+refreshes, and most of these apps scroll rather than turn pages.
+
+This plugin keeps lookups in KOReader's popup, with no conversion step:
+
+- It reads `.mdx`/`.mdd` files directly (MDict 1.2 and 2.0, zlib and LZO, encrypted
+  key index), and lists them with the StarDict dictionaries in *Manage dictionaries*.
+- On Android it lays entries out with the system WebView: full CSS, web fonts and
+  the fonts in the `.mdd`, vertical text, ruby, tate-chu-yoko, SVG, and the
+  dictionary's own scripts.
+- It plays pronunciations and example recordings from the `.mdd`.
+- It shows each entry a page at a time, sized to the popup, for e-ink. It works with
+  KOReader's large window and with nested lookups, lookup history and the
+  vocabulary builder.
+- It needs no custom KOReader build: its Java side is loaded at runtime. It updates
+  itself from this repository's releases.
 
 ## Screenshots
 
@@ -62,6 +97,8 @@ note; a notification says when an index you were waiting for is ready.
   along the bottom.
 - Links, `#anchors` and cross references work; tapping a collapsed section
   (such as *Extra Examples*) opens it in place.
+- Pinch out on the popup to switch to KOReader's large window, which fits more
+  on each page.
 - Hold a word to look it up; hold and drag to select. *Find in definition*
   searches the whole entry.
 - Tap a speaker icon to hear the recording (Android; AAC, MP3, Ogg and WAV
@@ -86,6 +123,16 @@ note; a notification says when an index you were waiting for is ready.
 - **Updates**: the installed version, *Check for updates*, and *Check for updates
   automatically* (on by default).
 
+Override files, for fixes a dictionary's own CSS or markup needs on an e-reader:
+
+- `name.koreader.css` next to `name.mdx`: extra CSS applied after the dictionary's own.
+- `name.koreader.lua` next to `name.mdx`: returns a function that takes an entry's
+  HTML and returns it changed, for fixes CSS cannot make. It can use the `string`,
+  `table` and `math` libraries only.
+- `mdict.koreader.css` and `mdict.koreader.lua` in a dictionary folder (or a folder
+  inside it): the same, for every dictionary in that folder and below, for example
+  all the files from one exporter. They apply before the per-dictionary files.
+
 ## Updates
 
 The plugin updates itself from this repository's
@@ -109,15 +156,16 @@ Releases are tagged `v<version>`, where `<version>` is the `version` in
 a tag or version that differs. A release needs an asset named
 `mdict.koplugin-<version>.zip`.
 
-Override files, for fixes a dictionary's own CSS or markup needs on an e-reader:
+## Limitations
 
-- `name.koreader.css` next to `name.mdx`: extra CSS applied after the dictionary's own.
-- `name.koreader.lua` next to `name.mdx`: returns a function that takes an entry's
-  HTML and returns it changed, for fixes CSS cannot make. It can use the `string`,
-  `table` and `math` libraries only.
-- `mdict.koreader.css` and `mdict.koreader.lua` in a dictionary folder (or a folder
-  inside it): the same, for every dictionary in that folder and below, for example
-  all the files from one exporter. They apply before the per-dictionary files.
+- MDict 3.0 files, and registered files whose records are encrypted, are not
+  supported yet.
+- Speex audio does not play.
+- The WebView renderer is Android only. On Kindle, Kobo, PocketBook and other
+  devices, entries are laid out by KOReader's renderer (MuPDF): text and images
+  show, but vertical text, scripts and audio do not.
+- Some dictionaries' CSS is made for color phone screens; override files (above)
+  can adapt it for e-ink.
 
 ## Dictionary exporters
 
