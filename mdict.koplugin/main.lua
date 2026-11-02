@@ -14,11 +14,15 @@ do
     local dir = debug.getinfo(1, "S").source:match("^@(.+)/main%.lua$")
     local load_update = dir and loadfile(dir .. "/mdict/update.lua")
     if load_update then
-        local ok, applied = pcall(function()
+        local ok, applied, from, to = pcall(function()
             return load_update().applyStaged(dir, function(...) require("logger").info(...) end)
         end)
         if not ok then require("logger").warn("MDict: applying an update failed:", applied) end
-        if ok and applied then return dofile(dir .. "/main.lua") end
+        if ok and applied then
+            -- lets the new version say it was updated, even if KOReader was killed before saving settings
+            package.loaded["mdict/applied_update"] = { from = from, to = to }
+            return dofile(dir .. "/main.lua")
+        end
     end
 end
 
@@ -59,8 +63,10 @@ local function settings()
     return state.settings
 end
 
-local function save_settings()
+-- flush: write the settings file now (KOReader otherwise writes it on exit or when put in the background)
+local function save_settings(flush)
     G_reader_settings:saveSetting(SETTINGS_KEY, state.settings)
+    if flush and G_reader_settings.flush then G_reader_settings:flush() end
 end
 state.saveSettings = save_settings
 

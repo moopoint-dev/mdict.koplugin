@@ -187,10 +187,13 @@ describe("update install", function()
         assert.equal("new main", mod.marker)
         assert.is_nil(mod.loaded)
         for k in pairs(package.loaded) do
-            assert.is_true(loaded_before[k] or not k:match("^mdict/") or false, "loaded " .. k)
+            local ok = loaded_before[k] or k == "mdict/applied_update" or not k:match("^mdict/")
+            assert.is_true(ok or false, "loaded " .. k)
         end
         assert.equal("0.9.0", Update.readMetaVersion(dir .. "/_meta.lua"))
         assert.is_nil(lfs.attributes(staged))
+        assert.same({ from = "0.1.0", to = "0.9.0" }, package.loaded["mdict/applied_update"])
+        package.loaded["mdict/applied_update"] = nil
     end)
 end)
 
@@ -305,6 +308,12 @@ describe("update checks", function()
         assert.equal("MDict dictionaries updated to 0.2.0.", shown[1].text)
         Updater.announceVersion()
         assert.equal(1, #scheduled)
+        -- moved in at this start, though the settings never recorded the old version
+        store.version_seen = nil
+        package.loaded["mdict/applied_update"] = { from = "0.1.9", to = "0.2.0" }
+        Updater.announceVersion()
+        assert.equal(2, #scheduled)
+        assert.is_nil(package.loaded["mdict/applied_update"])
     end)
 
     it("reads the subprocess's answer", function()

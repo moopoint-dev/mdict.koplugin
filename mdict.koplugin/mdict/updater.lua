@@ -30,7 +30,8 @@ function Updater.setup(s)
 end
 
 local function settings() return state.settings end
-local function save() if state.saveSettings then state.saveSettings() end end
+-- Update settings are written at once, so they hold even if KOReader is killed rather than closed.
+local function save() if state.saveSettings then state.saveSettings(true) end end
 
 function Updater.pluginDir()
     local p = state.plugin and state.plugin.path
@@ -287,10 +288,16 @@ end
 function Updater.announceVersion()
     local s = settings()
     local version, before = Updater.version(), s.version_seen
-    if before == version then return end
-    s.version_seen = version
-    save()
-    if before and Update.compare(version, before) == 1 then
+    -- set by main.lua when it moved a downloaded update in at this start
+    local applied = package.loaded["mdict/applied_update"]
+    package.loaded["mdict/applied_update"] = nil
+    local updated = (type(applied) == "table" and Update.compare(applied.to, version) == 0)
+        or (before ~= nil and Update.compare(version, before) == 1)
+    if before ~= version then
+        s.version_seen = version
+        save()
+    end
+    if updated then
         UIManager:scheduleIn(2, function()
             local Notification = require("ui/widget/notification")
             UIManager:show(Notification:new{ text = T(_("MDict dictionaries updated to %1."), version) })
