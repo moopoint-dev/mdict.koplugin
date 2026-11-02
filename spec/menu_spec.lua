@@ -117,6 +117,19 @@ describe("menus", function()
         DictList.shown = nil
     end)
 
+    it("has an Updates menu with the plugin's version and the automatic check switch", function()
+        local version = require("mdict/update").readMetaVersion(helper.root .. "/mdict.koplugin/_meta.lua")
+        local plugin = setmetatable({}, { __index = MDict })
+        local updates = find(plugin:menuItems(), "Updates (version " .. version .. ")").sub_item_table
+        find(updates, "Check for updates")
+        local auto = find(updates, "automatically")
+        assert.is_true(auto.checked_func())
+        auto.callback()
+        assert.is_false(store.mdict.auto_update)
+        auto.callback()
+        assert.is_nil(store.mdict.auto_update)
+    end)
+
     it("describes index states in the dictionary list", function()
         local DictList = require("widgets/dictlist")
         local Indexer = package.loaded["mdict/indexer"]

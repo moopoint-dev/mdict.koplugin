@@ -50,6 +50,31 @@ note; a notification says when an index you were waiting for is ready.
   sorted by name, with the state of each one's index; tap one for its file, size,
   resource files and override files.
 - **Rebuild indexes**, **Clear extracted resources**, **Rescan**.
+- **Updates**: the installed version, *Check for updates*, and *Check for updates
+  automatically* (on by default).
+
+## Updates
+
+The plugin updates itself from this repository's
+[releases](https://github.com/moopoint-dev/mdict.koplugin/releases) (from 0.2.0 on;
+install 0.2.0 by hand over 0.1.0).
+
+- *Check for updates* asks GitHub for the latest release, turning Wi-Fi on if needed,
+  and offers to install a newer one.
+- Automatic checks run at most once a day: a minute after KOReader starts, when it
+  connects to a network, or when the device wakes up. They only run when the device
+  is already connected (Wi-Fi is never turned on for them), in the background, and
+  say nothing unless there is a new version. Its offer has *Skip this version*.
+- *Update* downloads the release zip (checked against the size and SHA-256 that
+  GitHub lists) and unpacks it next to the plugin, as `.mdict.koplugin.update`. The
+  running plugin is not touched: the new version is moved in when KOReader next
+  starts, before any of the plugin's code loads. On Android, restart by exiting
+  KOReader and opening it again.
+
+Releases are tagged `v<version>`, where `<version>` is the `version` in
+`mdict.koplugin/_meta.lua`, the only place it is set; `tools/release.sh` refuses
+a tag or version that differs. A release needs an asset named
+`mdict.koplugin-<version>.zip`.
 
 Override files, for fixes a dictionary's own CSS or markup needs on an e-reader:
 
@@ -72,7 +97,8 @@ vectors in `spec/data/kosort-1.tsv`.
 ## Layout
 
 - `mdict.koplugin/mdict/`: MDict reader (v1.2/v2, zlib/LZO, encrypted key index),
-  the `kosort-1` key order and the sidecar index, lookups, KOReader hooks.
+  the `kosort-1` key order and the sidecar index, lookups, KOReader hooks, and the
+  updater (`update.lua`, `updater.lua`).
 - `mdict.koplugin/renderers/`: the pager (pager.js/pager.css), the pager document,
   the WebView driver and its backends (Android JNI bridge, desktop Chromium bridge).
 - `mdict.koplugin/widgets/`: the popup widgets (KOReader's HtmlBoxWidget and
@@ -94,7 +120,7 @@ vectors in `spec/data/kosort-1.tsv`.
         NODE_PATH=<dir with playwright> busted spec/
     ANDROID_JAR=.../android-30.jar android/build.sh
     NODE_PATH=... node tools/pager-test/run.js --res <res dir> --out <dir> entry.html
-    tools/release.sh [version]        # dist/mdict.koplugin-<version>.zip
+    tools/release.sh [version]        # dist/mdict.koplugin-<version>.zip (version from _meta.lua)
 
 Vertical Japanese test renders need a CJK font with vertical metrics (for
 example `fonts-noto-cjk`); without one, Chromium overlaps the glyphs.

@@ -8,6 +8,20 @@ appear in KOReader's own dictionary list and popup.
 @module koplugin.mdict
 ]]
 
+-- An update downloaded in an earlier session waits next to this folder (see mdict/update.lua).
+-- It is moved in here, before any of the plugin's modules are loaded, and its main.lua runs instead.
+do
+    local dir = debug.getinfo(1, "S").source:match("^@(.+)/main%.lua$")
+    local load_update = dir and loadfile(dir .. "/mdict/update.lua")
+    if load_update then
+        local ok, applied = pcall(function()
+            return load_update().applyStaged(dir, function(...) require("logger").info(...) end)
+        end)
+        if not ok then require("logger").warn("MDict: applying an update failed:", applied) end
+        if ok and applied then return dofile(dir .. "/main.lua") end
+    end
+end
+
 local DataStorage = require("datastorage")
 local InfoMessage = require("ui/widget/infomessage")
 local UIManager = require("ui/uimanager")
@@ -18,6 +32,7 @@ local T = require("ffi/util").template
 
 local Integration = require("mdict/integration")
 local Library = require("mdict/library")
+local Updater = require("mdict/updater")
 local fs = require("mdict/fs")
 
 local SETTINGS_KEY = "mdict"
@@ -34,6 +49,7 @@ local MDict = WidgetContainer:extend{
     is_doc_only = false,
 }
 MDict._state = state -- for the specs
+Updater.setup(state)
 
 local function settings()
     if not state.settings then
@@ -46,6 +62,7 @@ end
 local function save_settings()
     G_reader_settings:saveSetting(SETTINGS_KEY, state.settings)
 end
+state.saveSettings = save_settings
 
 local function dict_dirs()
     local data = G_defaults:readSetting("STARDICT_DATA_DIR") or os.getenv("STARDICT_DATA_DIR")
@@ -58,6 +75,7 @@ end
 function MDict.cacheDir()
     return DataStorage:getDataDir() .. "/cache/mdict"
 end
+state.cacheDir = MDict.cacheDir
 
 function MDict:init()
     local ReaderDictionary = require("apps/reader/modules/readerdictionary")
@@ -94,7 +112,19 @@ function MDict:init()
     if not state.prepared then
         state.prepared = true
         UIManager:scheduleIn(5, function() MDict.prepareIndexes() end)
+        Updater.announceVersion()
+        UIManager:scheduleIn(60, function() Updater.autoCheck("start") end)
     end
+end
+
+-- Automatic update checks (at most daily, only when already connected). Handlers return
+-- nothing, so the events go on to the other modules.
+function MDict:onNetworkConnected()
+    UIManager:scheduleIn(5, function() Updater.autoCheck("network") end)
+end
+
+function MDict:onResume()
+    UIManager:scheduleIn(30, function() Updater.autoCheck("resume") end)
 end
 
 --- Tells the reader when a dictionary they looked something up in has finished indexing,
@@ -234,7 +264,9 @@ function MDict:menuItems()
                 fs.removeTree(MDict.cacheDir() .. "/res")
                 UIManager:show(InfoMessage:new{ text = _("Extracted resources cleared."), timeout = 2 })
             end,
+            separator = true,
         },
+        Updater.menuItem(),
     }
     return items
 end
