@@ -199,6 +199,9 @@ def basic_entries(n=3000, seed=1):
                 '<a href="sound://audio/%s.mp3">play</a></div>' % (w, w, w[::-1], w[::-1], w))
     d["Apple"] = '<link rel="stylesheet" href="basic.css"><div class="hw">Apple</div><div class="def">a round fruit. Plural: <a href="entry://apples">apples<span style="border:1px solid;font-size:60%">A</span></a></div>'
     d["apples"] = "@@@LINK=Apple"
+    # some dictionaries keep entries under record numbers and link the words to them
+    d["banana"] = "@@@LINK=FRT0001234"
+    d["FRT0001234"] = '<div class="hw">ba·nana</div><div class="def">a long fruit</div>'
     d["look up"] = '<div class="hw">look up</div><div class="def">to search for something</div>'
     d["lookup"] = '<div class="hw">lookup</div><div class="def">the act of looking something up</div>'
     d["café"] = '<div class="hw">café</div>'

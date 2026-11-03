@@ -83,6 +83,12 @@ function Lookup.isInternalKey(key)
         or (key:find("%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x") ~= nil and not key:find("%s"))
 end
 
+--- True for link targets named like record numbers ("OKG1121512"), which some dictionaries
+-- keep their entries under, linking each word to one.
+function Lookup.isRecordKey(key)
+    return key:find("^%u[%u_-]*%d%d%d%d+$") ~= nil
+end
+
 -- A popup shows one result at a time, and a lookup can return dozens of large entries
 -- (40 for "run" in ten dictionaries), so a result's HTML is prepared when it is first
 -- read: `definition`, `mdict.html`, and a `word` that has to be taken from the entry.
@@ -283,7 +289,7 @@ function Lookup.run(dicts, words, opts)
                 return html
             end
             local word = e.key
-            if Lookup.isInternalKey(word) then word = opts.display_word end
+            if Lookup.isInternalKey(word) or (e.linked and Lookup.isRecordKey(word)) then word = opts.display_word end
             results[#results + 1] = lazy({
                 dict = d.title,
                 word = word,

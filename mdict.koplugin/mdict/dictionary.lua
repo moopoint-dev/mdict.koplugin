@@ -240,17 +240,18 @@ local function is_link(record)
 end
 
 --- Resolves an ordinal to its final record, following @@@LINK= redirects.
--- Returns the final key, ord, record and anchor (or nil when the chain is broken or loops).
+-- Returns the final key, ord, record and anchor, and whether a link led there
+-- (or nil when the chain is broken or loops).
 function Dictionary:_resolve(idx, ord)
     local mdx = self.mdx
     local key = mdx:keyAt(ord)
     local anchor
     local seen = {}
-    for _ = 0, Dictionary.MAX_LINK_HOPS do
+    for hop = 0, Dictionary.MAX_LINK_HOPS do
         if seen[ord] then return nil end
         seen[ord] = true
         local record = mdx:record(ord)
-        if not is_link(record) then return key, ord, record, anchor end
+        if not is_link(record) then return key, ord, record, anchor, hop > 0 end
         local target = record:sub(9):match("^%s*(.-)%s*$")
         local word, a = Html.splitAnchor(target)
         anchor = anchor or a
@@ -349,11 +350,12 @@ function Dictionary:lookup(word, opts)
     local out, seen = {}, opts.seen or {}
     local limit = opts.limit or (fuzzy and Dictionary.FUZZY_RESULTS or Dictionary.MAX_RESULTS)
     for _, r in ipairs(ranked) do
-        local key, ord, record, link_anchor = self:_resolve(idx, r.o)
+        local key, ord, record, link_anchor, linked = self:_resolve(idx, r.o)
         if key then
             if not seen[record] then
                 seen[record] = true
-                out[#out + 1] = { key = key, ord = ord, record = record, anchor = anchor or link_anchor, fuzzy = fuzzy }
+                out[#out + 1] = { key = key, ord = ord, record = record, anchor = anchor or link_anchor, fuzzy = fuzzy,
+                                  linked = linked }
                 if #out >= limit then break end
             end
         end
