@@ -73,6 +73,38 @@ describe("dictionary", function()
         d:close()
     end)
 
+    it("gathers an entry's CSS for KOReader's renderer", function()
+        local d = open("basic.mdx")
+        local fresh = helper.tmpdir("staticcache")
+        d.res_dir = fresh
+        assert.is_nil(d:staticCss("<p>no styles</p>"))
+        -- each stylesheet in a <style> element of its own, after KOReader's
+        local css = d:staticCss('<link rel="stylesheet" href="basic.css"><div class="hw">x</div>'
+            .. '<style>/* note */ .hw{color:red} .i{background:url(img/icon.png)}</style>'
+            .. '<link rel="stylesheet" href="https://example.com/remote.css"><link rel="stylesheet" href="chain/a.css">')
+        local sheets = {}
+        for sheet in (css .. "</style><style>"):gmatch("(.-)</style><style>") do sheets[#sheets + 1] = sheet end
+        assert.equal(4, #sheets)
+        assert.equal("\n", sheets[1])
+        assert.matches("^\n%.hw{font%-weight:bold}", sheets[2])
+        -- url()s are relative to the dictionary root, and what they name is extracted
+        assert.truthy(sheets[2]:find('src:url("fonts/t.ttf")', 1, true))
+        assert.truthy(fs.isFile(fresh .. "/fonts/t.ttf"))
+        assert.equal('\n .hw{color:red} .i{background:url("img/icon.png")}\n', sheets[3])
+        -- @import chains are inlined, with each sheet's url()s made relative to the root
+        assert.equal('\n.x{background:url("img/icon.png")}\n', sheets[4])
+        assert.truthy(fs.isFile(fresh .. "/chain/b.css"))
+        -- nothing in it can close the element early
+        assert.equal('\n</style><style>\n.a::after{content:"<\\/b>"}\n',
+            d:staticCss('<style>.a::after{content:"</b>"}</style>'))
+        -- lengths scaled to the popup, the stylesheet's once for each scale
+        assert.equal("\n</style><style>\n.a{margin:3px}\n", d:staticCss("<style>.a{margin:2px}</style>", 1.5))
+        css = d:staticCss('<link rel="stylesheet" href="basic.css"><style>.b{margin:1px}</style>', 2)
+        assert.truthy(css:find(".def{margin-left:1em}", 1, true))
+        assert.truthy(css:find(".b{margin:2px}", 1, true))
+        d:close()
+    end)
+
     it("builds a sidecar for large unsorted files, then uses it", function()
         local old = Dictionary.MEMORY_INDEX_MAX
         Dictionary.MEMORY_INDEX_MAX = 0

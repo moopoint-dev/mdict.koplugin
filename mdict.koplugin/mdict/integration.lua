@@ -14,6 +14,7 @@ Hooks into KOReader's dictionary lookup.
   available (see Integration.widget).
 ]]
 
+local Html = require("mdict/html")
 local Lookup = require("mdict/lookup")
 local clock = require("mdict/clock")
 
@@ -216,6 +217,33 @@ function Integration.startSdcv(orig, rd, word, dict_names, fuzzy_search)
     return out
 end
 
+--- Screen pixels for a CSS px in KOReader's dictionary popup: its text size (dict_font_size,
+-- scaled for the screen as the popup does) for 16 px, the size of a browser's default text.
+function Integration.cssPx(font_size)
+    local ok, Device = pcall(require, "device")
+    local screen = ok and type(Device) == "table" and Device.screen
+    if not (screen and screen.scaleBySize) then return 1 end
+    font_size = font_size or (G_reader_settings and G_reader_settings:readSetting("dict_font_size")) or 20
+    return screen:scaleBySize(font_size) / 16
+end
+
+--- Readies an MDict result for KOReader's own renderer (MuPDF): extracts its resources, gives
+-- it the dictionary's CSS, and scales the absolute lengths in that CSS and in the entry's style
+-- attributes to the popup's text size. font_size: the popup's, when there is one.
+function Integration.prepareStatic(r, d, font_size)
+    if r.mdict_static then return end
+    r.mdict_static = true
+    pcall(d.prefetch, d, r.definition)
+    local px = Integration.cssPx(font_size)
+    local ok, css = pcall(d.staticCss, d, r.definition, px)
+    if ok then
+        r.css = css
+        if px ~= 1 then r.definition = Html.scaleStyleAttributes(r.definition, px) end
+    else
+        require("logger").warn("MDict: stylesheets for", d.title, "failed:", css)
+    end
+end
+
 --- The wrapped showDict: restores MDict fields, prepares MuPDF resources when needed.
 function Integration.prepareResults(results)
     if not results then return end
@@ -228,7 +256,7 @@ function Integration.prepareResults(results)
             if d then
                 r.dictionary_resource_directory = d.res_dir
                 r.css = d:userCss()
-                if static then pcall(d.prefetch, d, r.definition) end
+                if static then Integration.prepareStatic(r, d) end
             end
         end
     end
@@ -266,7 +294,7 @@ function Integration.install(state)
             if not prefix and not uri:find("://") then prefix, word = "", uri end
             if word then
                 -- targets are written URL-encoded ("nucleic%20acid"), keys are not
-                local decoded = require("mdict/html").decodeLinkTarget(word)
+                local decoded = Html.decodeLinkTarget(word)
                 if decoded ~= word then
                     local copy = {}
                     for k, v in pairs(link) do copy[k] = v end
@@ -322,6 +350,13 @@ function Integration.installWidgetHooks()
             end
         end
         dql.mdict_widget = nil
+        -- an MDict result that MuPDF shows after all (the WebView could not)
+        r = dql.results and dql.results[dql.dict_index]
+        local d = r and r.mdict and not r.mdict_static and Integration.state.library:byId(r.mdict.id)
+        if d then
+            Integration.prepareStatic(r, d, dql.dict_font_size)
+            dql.css, dql.definition = r.css, r.definition
+        end
         return orig_instantiate(dql)
     end
 

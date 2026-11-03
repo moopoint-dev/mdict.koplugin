@@ -493,6 +493,86 @@ function Dictionary:prefetch(html)
     return self.res_dir
 end
 
+-- A stylesheet's text made ready for the page itself: comments dropped, local @imports
+-- replaced by the sheets they name (MuPDF does not follow @import), and local url()s made
+-- relative to the dictionary root, where the page resolves them, with what they name extracted.
+-- base: the stylesheet's folder, relative to the root; stack: the sheets being inlined.
+function Dictionary:_inlineCss(css, base, stack)
+    css = css:gsub("^\239\187\191", ""):gsub("/%*.-%*/", ""):gsub("^%s*<!%-%-", ""):gsub("%-%->%s*$", "")
+    -- imported sheets go in once this one's url()s are rewritten: theirs are relative to the root already
+    local imported = {}
+    local function import(ref)
+        if not Html.isLocalRef(ref) then return nil end
+        local p = Html.resourcePath(ref, base)
+        local sheet = ""
+        if not stack[p] and #stack < 4 then sheet = self:_staticSheet(p, stack) end
+        imported[#imported + 1] = sheet
+        return "\0" .. #imported .. "\0"
+    end
+    css = css:gsub("@[Ii][Mm][Pp][Oo][Rr][Tt]%s*[Uu][Rr][Ll]%(%s*['\"]?([^'\")]*)['\"]?%s*%)[^;]*;", import)
+    css = css:gsub("@[Ii][Mm][Pp][Oo][Rr][Tt]%s*['\"]([^'\"]*)['\"][^;]*;", import)
+    css = css:gsub("([Uu][Rr][Ll]%(%s*)['\"]?([^'\")]*)['\"]?%s*%)", function(pre, ref)
+        if not Html.isLocalRef(ref) then return nil end
+        local p = Html.resourcePath(ref, base)
+        self:resource(p)
+        return pre .. '"' .. p:gsub('[\\"]', "\\%0") .. '")'
+    end)
+    if #imported == 0 then return css end
+    return (css:gsub("%z(%d+)%z", function(n) return imported[tonumber(n)] end))
+end
+
+function Dictionary:_staticSheet(p, stack)
+    self._static_sheets = self._static_sheets or {}
+    local css = self._static_sheets[p]
+    if css then return css end
+    local file = self:resource(p)
+    css = file and fs.readAll(file) or ""
+    stack[p] = true
+    stack[#stack + 1] = p
+    css = self:_inlineCss(css, p:match("^(.*)/[^/]*$") or "", stack)
+    stack[p] = nil
+    stack[#stack] = nil
+    self._static_sheets[p] = css
+    return css
+end
+
+--- CSS for KOReader's own renderer (MuPDF) to show an entry with: the entry's stylesheets and
+-- <style> elements, then the override files' CSS (see userCss), or nil when there is none.
+-- MuPDF reads stylesheets only from a page's <head>, and KOReader puts the entry in the
+-- <body>, so they have to come this way. KOReader writes this CSS into one <style> element
+-- after its own; each stylesheet gets an element of its own instead, because MuPDF drops the
+-- whole element when it cannot parse something in it.
+-- px: screen pixels for a CSS px (see Html.scaleLengths); 1 leaves lengths as they are.
+function Dictionary:staticCss(html, px)
+    px = px or 1
+    local function scaled(css)
+        if px == 1 then return css end
+        return Html.scaleLengths(css, px)
+    end
+    self._scaled_sheets = self._scaled_sheets or {}
+    local parts = {}
+    for _, src in ipairs(Html.styleSources(html)) do
+        local css = ""
+        if not src.href then
+            css = scaled(self:_inlineCss(src.text, "", {}))
+        elseif Html.isLocalRef(src.href) then
+            local p = Html.resourcePath(src.href, "")
+            local c = self._scaled_sheets[p]
+            if not (c and c.px == px) then
+                c = { px = px, css = scaled(self:_staticSheet(p, {})) }
+                self._scaled_sheets[p] = c
+            end
+            css = c.css
+        end
+        if css:find("%S") then parts[#parts + 1] = css end
+    end
+    local user = self:userCss()
+    if user then parts[#parts + 1] = scaled(user) end
+    if #parts == 0 then return nil end
+    for i, css in ipairs(parts) do parts[i] = css:gsub("</", "<\\/") end
+    return "\n</style><style>\n" .. table.concat(parts, "\n</style><style>\n") .. "\n"
+end
+
 --- Extra CSS for this dictionary from its override files (shared mdict.koreader.css files,
 -- then <name>.koreader.css next to the .mdx), or nil when there is none.
 function Dictionary:userCss()

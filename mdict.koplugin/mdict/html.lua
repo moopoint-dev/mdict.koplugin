@@ -107,6 +107,62 @@ function Html.extractStylesheets(html)
     return html, hrefs
 end
 
+--- The stylesheets an entry uses, in document order: { href = ... } for each
+-- <link rel="stylesheet"> (each href once) and { text = ... } for each <style> element.
+function Html.styleSources(html)
+    local out, seen = {}, {}
+    local lower = html:lower()
+    local i = 1
+    while true do
+        local l = lower:find("<link", i, true)
+        local s = lower:find("<style", i, true)
+        if not (l or s) then break end
+        if l and (not s or l < s) then
+            local e = html:find(">", l, true) or #html
+            local tag = html:sub(l, e)
+            if html:sub(l + 5, l + 5):find("^[%s/>]") and (attr(tag, "rel") or ""):lower():find("stylesheet", 1, true) then
+                local href = attr(tag, "href")
+                if href and href ~= "" and not seen[href] then
+                    seen[href] = true
+                    out[#out + 1] = { href = href }
+                end
+            end
+            i = e + 1
+        else
+            local e = html:find(">", s, true) or #html
+            if html:sub(s + 6, s + 6):find("^[%s/>]") and html:byte(e - 1) ~= 47 then
+                local close = lower:find("</style", e + 1, true)
+                out[#out + 1] = { text = html:sub(e + 1, (close or #html + 1) - 1) }
+                e = close and (html:find(">", close, true) or #html) or #html
+            end
+            i = e + 1
+        end
+    end
+    return out
+end
+
+-- Absolute CSS lengths, in CSS px.
+local CSS_PX = { px = 1, pt = 4 / 3, pc = 16, ["in"] = 96, cm = 96 / 2.54, mm = 96 / 25.4, q = 96 / 101.6, rem = 16 }
+
+--- CSS (or a style attribute's value) with its absolute lengths turned into px and multiplied by
+-- `px`. MuPDF takes a CSS px or pt for one screen pixel and a rem for 16, so on a dense screen
+-- text sized that way comes out a fraction of the size of KOReader's.
+function Html.scaleLengths(css, px)
+    return (css:gsub("([%s:,(/])(%-?%d*%.?%d+)(%a+)()", function(pre, num, unit, after)
+        local k = CSS_PX[unit:lower()]
+        if not k or css:sub(after, after):find("^[%w_.-]") then return nil end
+        local v = tonumber(num) * k * px
+        return pre .. (string.format("%.2f", v):gsub("%.?0+$", "")) .. "px"
+    end))
+end
+
+--- HTML with the absolute lengths in its style attributes scaled (see scaleLengths).
+function Html.scaleStyleAttributes(html, px)
+    local function scale(pre, q, value) return pre .. q .. Html.scaleLengths(value, px) .. q end
+    html = gsub_at(html, "style", 1, '(%s[Ss][Tt][Yy][Ll][Ee]%s*=%s*)(")([^"]*)"', scale)
+    return gsub_at(html, "style", 1, "(%s[Ss][Tt][Yy][Ll][Ee]%s*=%s*)(')([^']*)'", scale)
+end
+
 --- Rewrites MDict link schemes for KOReader:
 --   entry://word#anchor -> bword://word#anchor (native nested lookup)
 --   sound://path        -> mdict-sound://path   (handled by the plugin)

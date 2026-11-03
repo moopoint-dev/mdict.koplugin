@@ -16,6 +16,28 @@ describe("html", function()
         assert.equal('<p>x</p><link rel="icon" href="i.png">', html)
     end)
 
+    it("lists an entry's stylesheets and style elements in order", function()
+        local sources = Html.styleSources('<style>.a{}</style><link rel="stylesheet" href="a.css"/><p>x</p>'
+            .. '<LINK REL=stylesheet HREF=a.css><linkx rel="stylesheet" href="x.css"><link rel="icon" href="i.png">'
+            .. '<STYLE type="text/css">.b{}</STYLE ><style/><stylex>.c{}</stylex><link href="b.css" rel="Stylesheet">'
+            .. "<style>.d{}")
+        assert.same({ { text = ".a{}" }, { href = "a.css" }, { text = ".b{}" }, { href = "b.css" }, { text = ".d{}" } },
+            sources)
+        assert.same({}, Html.styleSources("<p>plain</p>"))
+    end)
+
+    it("scales absolute CSS lengths", function()
+        assert.equal("a{font-size:28px;margin:0 -4px 1.5em 2px;font:24px/1.4 serif}",
+            Html.scaleLengths("a{font-size:14px;margin:0 -2px 1.5em 1PX;font:9pt/1.4 serif}", 2))
+        assert.equal("b{width:calc(100% - 192px);border:1.5px solid;padding:32px}",
+            Html.scaleLengths("b{width:calc(100% - 1in);border:.75px solid;padding:1rem}", 2))
+        -- not in names, urls or numbers without units
+        assert.equal('.w10px,.a-2px{background:url("img/10px.png");z-index:10;line-height:1.2}',
+            Html.scaleLengths('.w10px,.a-2px{background:url("img/10px.png");z-index:10;line-height:1.2}', 2))
+        assert.equal([[<p style="font-size:24px" data-style="x:1px"><b STYLE='margin: 3px'>]],
+            Html.scaleStyleAttributes([[<p style="font-size:12px" data-style="x:1px"><b STYLE='margin: 1.5px'>]], 2))
+    end)
+
     it("rewrites link schemes", function()
         assert.equal('<a href="bword://run#s1">', Html.rewriteLinks('<a href="entry://run#s1">'))
         assert.equal("<a href='mdict-sound://a/b.aac'>", Html.rewriteLinks("<a href='sound://a/b.aac'>"))

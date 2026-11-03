@@ -162,8 +162,9 @@ a tag or version that differs. A release needs an asset named
   supported yet.
 - Speex audio does not play.
 - The WebView renderer is Android only. On Kindle, Kobo, PocketBook and other
-  devices, entries are laid out by KOReader's renderer (MuPDF): text and images
-  show, but vertical text, scripts and audio do not.
+  devices, entries are laid out by KOReader's renderer (MuPDF) with the
+  dictionary's CSS, as far as MuPDF supports it (no flexbox or grid). Vertical
+  text, scripts (such as buttons that open or close a section) and audio do not work.
 - Some dictionaries' CSS is made for color phone screens; override files (above)
   can adapt it for e-ink.
 

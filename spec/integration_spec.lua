@@ -87,6 +87,8 @@ describe("integration", function()
         assert.equal(lib:byTitle("Basic Test").res_dir, r[1].dictionary_resource_directory)
         -- MuPDF needs the resources up front when no other renderer is active
         assert.truthy(require("mdict/fs").isFile(lib:byTitle("Basic Test").res_dir .. "/basic.css"))
+        -- and the entry's stylesheet in its CSS: MuPDF does not read the <link> in the entry
+        assert.truthy(r[1].css:find(".hw{font-weight:bold}", 1, true))
     end)
 
     it("handles MDict link schemes", function()
@@ -127,6 +129,18 @@ describe("integration", function()
         assert.equal("web", dql.text_widget.kind)
         assert.equal(2, made)
         Integration.state.widget = nil
+    end)
+
+    it("gives MuPDF the dictionary's CSS for a result the renderer cannot show", function()
+        Integration.state.renderer = function() return {} end
+        Integration.state.widget = function() return nil end
+        rd:stardictLookup("apples", { "Basic Test" }, false)
+        local r = rd.shown.results[1]
+        assert.is_nil(r.css)
+        local dql = DictQuickLookup:new({ results = rd.shown.results })
+        assert.equal("html", dql.text_widget.kind)
+        assert.truthy(dql.css:find(".hw{font-weight:bold}", 1, true))
+        Integration.state.renderer, Integration.state.widget = nil, nil
     end)
 
     it("asks for the next result to be laid out ahead, and drops it on close", function()
