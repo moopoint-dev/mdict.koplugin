@@ -20,8 +20,7 @@ body:
     attributes:
       label: What you'd like / 希望的功能
       description: |
-        How you'd like it to work. Mockups, photos, or how another app (GoldenDict, Eudic,
-        DictTango…) does it are welcome.
+        How you'd like it to work. Mockups, photos, or how another app (GoldenDict, Eudic, DictTango…) does it are welcome.
     validations:
       required: true
 

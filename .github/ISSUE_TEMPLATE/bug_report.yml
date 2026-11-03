@@ -7,11 +7,7 @@ body:
       value: |
         Thanks for reporting. English or Chinese is fine. 中文或英文都可以。
 
-        How an entry looks depends on the device: on Android, entries are laid out by the system
-        WebView; on Kindle, Kobo, PocketBook and other devices, by KOReader's built-in renderer
-        (MuPDF), which has no vertical text, scripts or audio. See the README's
-        [Limitations](https://github.com/moopoint-dev/mdict.koplugin#limitations) for what is
-        known not to work yet.
+        How an entry looks depends on the device: on Android, entries are laid out by the system WebView; on Kindle, Kobo, PocketBook and other devices, by KOReader's built-in renderer (MuPDF), which has no vertical text, scripts or audio. See the README's [Limitations](https://github.com/moopoint-dev/mdict.koplugin#limitations) for what is known not to work yet.
 
   - type: input
     id: device
@@ -39,7 +35,8 @@ body:
     attributes:
       label: OS or firmware version / 系统或固件版本
       description: |
-        Android: Settings → About. Kindle: Settings → Device Options → Device Info.
+        Android: Settings → About.
+        Kindle: Settings → Device Options → Device Info.
         Kobo: Settings → Device information.
       placeholder: e.g. Android 12, Kindle 5.16.21, Kobo 4.38
     validations:
@@ -50,8 +47,7 @@ body:
     attributes:
       label: Android System WebView version (Android only) / WebView 版本（仅安卓）
       description: |
-        In the system's app list, under Android System WebView (on some devices, Chrome).
-        Leave empty on other devices.
+        In the system's app list, under Android System WebView (on some devices, Chrome). Leave empty on other devices.
       placeholder: e.g. 119.0.6045.193
 
   - type: dropdown
@@ -90,8 +86,7 @@ body:
     attributes:
       label: Renderer / 渲染方式
       description: |
-        Android uses the WebView unless *Display → Render entries with the WebView* is off.
-        Other devices always use KOReader's built-in renderer.
+        Android uses the WebView unless *Display → Render entries with the WebView* is off. Other devices always use KOReader's built-in renderer.
       options:
         - WebView (Android)
         - KOReader's built-in renderer (MuPDF)
@@ -114,8 +109,7 @@ body:
     attributes:
       label: Where the dictionary came from / 词典来源
       description: |
-        A link to the post or page you got it from (for example a FreeMdict forum thread), or the
-        tool that made it, so the problem can be reproduced with the same file.
+        A link to the post or page you got it from (for example a FreeMdict forum thread), or the tool that made it, so the problem can be reproduced with the same file.
       placeholder: https://forum.freemdict.com/t/…
     validations:
       required: true
@@ -156,8 +150,7 @@ body:
     attributes:
       label: Screenshots or photos / 截图或照片
       description: |
-        Drag images here. A KOReader screenshot or a photo of the screen is fine. If you can, also
-        show the same entry in another app (GoldenDict, Eudic, MDict…).
+        Drag images here. A KOReader screenshot or a photo of the screen is fine. If you can, also show the same entry in another app (GoldenDict, Eudic, MDict…).
         把图片拖到这里，屏幕截图或拍照都可以。
     validations:
       required: true
@@ -167,8 +160,7 @@ body:
     attributes:
       label: Logs / 日志
       description: |
-        If KOReader crashed or showed an error: `crash.log` from the koreader folder
-        (Kindle, Kobo, PocketBook).
+        If KOReader crashed or showed an error: `crash.log` from the koreader folder (Kindle, Kobo, PocketBook).
       render: text
 
   - type: textarea
