@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: README / 使用说明
+    url: https://github.com/moopoint-dev/mdict.koplugin#readme
+    about: Installing, settings, override files for a dictionary's CSS, and updates. 安装、设置与更新。
+  - name: Known limitations / 已知限制
+    url: https://github.com/moopoint-dev/mdict.koplugin#limitations
+    about: What doesn't work yet, such as vertical text and audio outside Android. 目前尚不支持的功能。

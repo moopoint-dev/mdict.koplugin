@@ -1,0 +1,177 @@
+name: Bug report / 问题反馈
+description: Something doesn't work, or an entry looks wrong. 功能异常或词条显示有误。
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. English or Chinese is fine. 中文或英文都可以。
+
+        How an entry looks depends on the device: on Android, entries are laid out by the system
+        WebView; on Kindle, Kobo, PocketBook and other devices, by KOReader's built-in renderer
+        (MuPDF), which has no vertical text, scripts or audio. See the README's
+        [Limitations](https://github.com/moopoint-dev/mdict.koplugin#limitations) for what is
+        known not to work yet.
+
+  - type: input
+    id: device
+    attributes:
+      label: Device model / 设备型号
+      placeholder: e.g. Boox Leaf 3C, Kindle Paperwhite 5, Kobo Clara 2E
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform / 系统
+      options:
+        - Android
+        - Kindle
+        - Kobo
+        - PocketBook
+        - Other (say which in the next field)
+    validations:
+      required: true
+
+  - type: input
+    id: os-version
+    attributes:
+      label: OS or firmware version / 系统或固件版本
+      description: |
+        Android: Settings → About. Kindle: Settings → Device Options → Device Info.
+        Kobo: Settings → Device information.
+      placeholder: e.g. Android 12, Kindle 5.16.21, Kobo 4.38
+    validations:
+      required: true
+
+  - type: input
+    id: webview-version
+    attributes:
+      label: Android System WebView version (Android only) / WebView 版本（仅安卓）
+      description: |
+        In the system's app list, under Android System WebView (on some devices, Chrome).
+        Leave empty on other devices.
+      placeholder: e.g. 119.0.6045.193
+
+  - type: dropdown
+    id: koreader-build
+    attributes:
+      label: KOReader build / KOReader 版本来源
+      options:
+        - Upstream KOReader (koreader/koreader)
+        - Tategumi fork (m-tky/koreader-tategumi)
+        - Other (say which in the next field)
+    validations:
+      required: true
+
+  - type: input
+    id: koreader-version
+    attributes:
+      label: KOReader version / KOReader 版本
+      description: Main menu (☰) → Help → About. 主菜单 → 帮助 → 关于。
+      placeholder: e.g. v2025.10
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version / 插件版本
+      description: |
+        Search menu (🔍) → Settings → MDict dictionaries → *Updates (version …)*.
+        Or `version` in `mdict.koplugin/_meta.lua`.
+      placeholder: e.g. 0.2.2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: renderer
+    attributes:
+      label: Renderer / 渲染方式
+      description: |
+        Android uses the WebView unless *Display → Render entries with the WebView* is off.
+        Other devices always use KOReader's built-in renderer.
+      options:
+        - WebView (Android)
+        - KOReader's built-in renderer (MuPDF)
+        - Both
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: dictionary
+    attributes:
+      label: Dictionary / 词典
+      description: The `.mdx` file name, and the dictionary's title if it is different.
+      placeholder: e.g. oaldc10.mdx (Oxford Advanced Learner's Dictionary, 10th edition)
+    validations:
+      required: true
+
+  - type: input
+    id: dictionary-source
+    attributes:
+      label: Where the dictionary came from / 词典来源
+      description: |
+        A link to the post or page you got it from (for example a FreeMdict forum thread), or the
+        tool that made it, so the problem can be reproduced with the same file.
+      placeholder: https://forum.freemdict.com/t/…
+    validations:
+      required: true
+
+  - type: input
+    id: word
+    attributes:
+      label: Word looked up / 查询的词
+      description: The word or entry that shows the problem, if it is about one.
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / 重现步骤
+      placeholder: |
+        1. Open a book and hold a word
+        2. Swipe to the next page of the entry
+        3. …
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected / 期望结果
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened / 实际结果
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or photos / 截图或照片
+      description: |
+        Drag images here. A KOReader screenshot or a photo of the screen is fine. If you can, also
+        show the same entry in another app (GoldenDict, Eudic, MDict…).
+        把图片拖到这里，屏幕截图或拍照都可以。
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / 日志
+      description: |
+        If KOReader crashed or showed an error: `crash.log` from the koreader folder
+        (Kindle, Kobo, PocketBook).
+      render: text
+
+  - type: textarea
+    id: other
+    attributes:
+      label: Anything else / 其他信息

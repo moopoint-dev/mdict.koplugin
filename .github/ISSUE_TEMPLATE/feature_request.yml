@@ -1,0 +1,49 @@
+name: Feature request / 功能建议
+description: Suggest a new feature or a change. 建议新功能或改进。
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. English or Chinese is fine. 中文或英文都可以。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would it help with? / 想解决什么问题
+      description: What you are trying to do, and what gets in the way today.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like / 希望的功能
+      description: |
+        How you'd like it to work. Mockups, photos, or how another app (GoldenDict, Eudic,
+        DictTango…) does it are welcome.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Devices it's for / 适用设备
+      multiple: true
+      options:
+        - Android
+        - Kindle
+        - Kobo
+        - PocketBook
+        - Other
+
+  - type: input
+    id: dictionary
+    attributes:
+      label: Dictionary, if it's about one / 相关词典（如有）
+      description: Its name and where it came from.
+
+  - type: textarea
+    id: other
+    attributes:
+      label: Anything else / 其他信息
