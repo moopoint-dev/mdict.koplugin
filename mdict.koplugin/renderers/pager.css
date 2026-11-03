@@ -7,6 +7,9 @@ html, body {
   overflow: hidden !important; background: #fff !important;
   -webkit-text-size-adjust: none; text-size-adjust: none;
 }
+/* The pager's own elements (see Document.build), which a dictionary's * rules can
+   still reach: an inline #mdict-content gets no columns, and transforms do not move it. */
+#mdict-pager, #mdict-content, #mdict-zoom { display: block; float: none; margin: 0; padding: 0; border: 0; }
 #mdict-pager {
   position: absolute; left: 0; top: 0;
   width: var(--mdict-page-w); height: var(--mdict-page-h);
@@ -29,7 +32,6 @@ body.mdict-vertical #mdict-content {
 /* slices: one long strip, moved and clipped a page at a time by pager.js */
 body.mdict-slices #mdict-content { columns: auto; column-width: auto; height: auto; }
 body.mdict-slices.mdict-vertical #mdict-content { width: auto; height: var(--mdict-page-h); }
-#mdict-zoom { display: block; }
 /* pages are captured as still images */
 #mdict-zoom *, #mdict-zoom *::before, #mdict-zoom *::after {
   transition: none !important; animation-duration: 0s !important; animation-delay: 0s !important;

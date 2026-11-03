@@ -326,8 +326,10 @@ function Document.build(opts)
         parts[#parts + 1] = "<style id=\"mdict-user-css\">\n" .. opts.user_css:gsub("</", "<\\/") .. "\n</style>"
     end
     parts[#parts + 1] = "<script>\n" .. asset(dir, "pager.js") .. "\n</script>"
-    parts[#parts + 1] = '</head><body><div id="mdict-pager"><div id="mdict-content">'
-        .. '<div id="mdict-zoom"></div></div></div></body></html>'
+    -- The pager's boxes are elements of their own, not divs: a dictionary's div rules
+    -- (Encarta makes every div inline) must not reach them.
+    parts[#parts + 1] = '</head><body><mdict-pager id="mdict-pager"><mdict-content id="mdict-content">'
+        .. '<mdict-zoom id="mdict-zoom"></mdict-zoom></mdict-content></mdict-pager></body></html>'
     local html = table.concat(parts)
     local key_parts = { tostring(#html), opts.lang or "" }
     for _, href in ipairs(opts.stylesheets or {}) do key_parts[#key_parts + 1] = href end

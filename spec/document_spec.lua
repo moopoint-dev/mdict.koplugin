@@ -19,6 +19,8 @@ describe("document", function()
         assert.truthy(a:find('<link rel="stylesheet" href="style.css">', 1, true))
         assert.truthy(a:find("window.MDict = MDict", 1, true))
         assert.truthy(a:find('id="mdict-zoom"', 1, true))
+        -- the pager's own boxes are not divs, which a dictionary's CSS may make inline
+        assert.falsy(a:find("<div", 1, true))
         assert.are_not.equal(ka, kb)
         assert.equal(ka, kc)
         -- pager CSS comes after the dictionary's stylesheet
