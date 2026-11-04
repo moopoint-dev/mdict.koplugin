@@ -45,25 +45,34 @@ Document.FONT_ALIASES = {
 }
 
 --- Local font names tried for each kind, regular and bold, in order.
--- Names are full names and PostScript names as Android's font index knows them.
+-- Names are full names and PostScript names as Android's font index knows them, then the
+-- fonts of Kindle firmware (for the Kindle's browser). Its Chromium 75 matches local() against
+-- family names only, and always finds the regular face: bold lists leave the family out, so
+-- that their face fails and bold is drawn from the regular one.
 Document.FONT_TARGETS = {
     ["serif-cjk"] = {
         regular = { "Noto Serif CJK JP", "NotoSerifCJKjp-Regular", "Noto Serif CJK JP Regular",
-                    "Noto Sans CJK JP", "NotoSansCJKjp-Regular", "Noto Sans CJK JP Regular" },
+                    "Noto Sans CJK JP", "NotoSansCJKjp-Regular", "Noto Sans CJK JP Regular",
+                    "TBMincho Medium", "MonotypeTBMincho-Medium", "TBMincho" },
         bold = { "Noto Serif CJK JP Bold", "NotoSerifCJKjp-Bold",
-                 "Noto Sans CJK JP Bold", "NotoSansCJKjp-Bold" },
+                 "Noto Sans CJK JP Bold", "NotoSansCJKjp-Bold",
+                 "TBMincho Bold", "MonotypeTBMincho-Bold" },
     },
     ["sans-cjk"] = {
-        regular = { "Noto Sans CJK JP", "NotoSansCJKjp-Regular", "Noto Sans CJK JP Regular" },
-        bold = { "Noto Sans CJK JP Bold", "NotoSansCJKjp-Bold" },
+        regular = { "Noto Sans CJK JP", "NotoSansCJKjp-Regular", "Noto Sans CJK JP Regular",
+                    "TBGothic Medium", "MonotypeTBGothic-Medium", "TBGothic" },
+        bold = { "Noto Sans CJK JP Bold", "NotoSansCJKjp-Bold", "TBGothic Bold", "MonotypeTBGothic-Bold" },
     },
     serif = {
-        regular = { "Noto Serif", "NotoSerif", "Noto Serif Regular", "NotoSerif-Regular" },
-        bold = { "Noto Serif Bold", "NotoSerif-Bold" },
+        regular = { "Noto Serif", "NotoSerif", "Noto Serif Regular", "NotoSerif-Regular",
+                    "Bookerly Regular", "Bookerly-Regular", "Bookerly" },
+        bold = { "Noto Serif Bold", "NotoSerif-Bold", "Bookerly Bold", "Bookerly-Bold" },
     },
     sans = {
-        regular = { "Roboto", "Roboto-Regular", "Roboto Regular", "Noto Sans", "NotoSans-Regular" },
-        bold = { "Roboto Bold", "Roboto-Bold", "Noto Sans Bold", "NotoSans-Bold" },
+        regular = { "Roboto", "Roboto-Regular", "Roboto Regular", "Noto Sans", "NotoSans-Regular",
+                    "Amazon Ember Regular", "AmazonEmber-Regular", "Amazon Ember" },
+        bold = { "Roboto Bold", "Roboto-Bold", "Noto Sans Bold", "NotoSans-Bold", "Amazon Ember Bold",
+                 "AmazonEmber-Bold", "Amazon Ember" },
     },
 }
 
