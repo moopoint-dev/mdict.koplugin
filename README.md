@@ -126,6 +126,13 @@ note; a notification says when an index you were waiting for is ready.
   developed, which would use the browser that Kindle firmware 5.16.4 and later ships.
   It only reads system information (memory, Amazon's services, the browser's files),
   starts nothing, and saves the report as `koreader/mdict-kindle-report.txt`.
+- **Kindle browser test (experimental)** (Kindles only): starts the Kindle's own
+  browser once in the background, lays out two sample entries with it, and closes it
+  again. It reports the time and memory this took, and shows the pages the browser
+  drew. Everything it puts on the Kindle goes to `/tmp` and is removed afterwards;
+  the report is saved as `koreader/mdict-kindle-browser-test.txt`, with the pages
+  beside it. It supports firmware 5.16 to 5.18 for now (the browser that runs in
+  Amazon's `/chroot`).
 
 Override files, for fixes a dictionary's own CSS or markup needs on an e-reader:
 
@@ -190,6 +197,9 @@ vectors in `spec/data/kosort-1.tsv`.
   the WebView driver and its backends (Android JNI bridge, desktop Chromium bridge).
 - `mdict.koplugin/widgets/`: the popup widgets (KOReader's HtmlBoxWidget and
   ScrollHtmlWidget interfaces, backed by the pager).
+- `kindle/`: the library the Kindle browser test preloads into Amazon's browser (it
+  opens the DevTools pipe, keeps the window off the screen and away from the Kindle's
+  own software), built into `mdict.koplugin/kindle/kindle_shim.so` by `kindle/build.sh`.
 - `android/`: Java side of the Android bridge, built into
   `mdict.koplugin/android/mdict-bridge.dex` and loaded at runtime (no custom
   KOReader build needed).
@@ -205,6 +215,8 @@ vectors in `spec/data/kosort-1.tsv`.
     # popup widgets and menus against a KOReader checkout, rendering with headless Chromium:
     KOREADER_FRONTEND=<koreader>/frontend MDICT_CHROMIUM_BRIDGE=$PWD/tools/chromium-bridge/bridge.js \
         NODE_PATH=<dir with playwright> busted spec/
+    MDICT_CHROMIUM=<chromium binary> busted spec/kindletest_spec.lua  # the Kindle test, run on Chromium
+    kindle/build.sh                   # needs gcc-arm-linux-gnueabihf and libx11-dev
     ANDROID_JAR=.../android-30.jar android/build.sh
     NODE_PATH=... node tools/pager-test/run.js --res <res dir> --out <dir> entry.html
     tools/release.sh [version]        # dist/mdict.koplugin-<version>.zip (version from _meta.lua)

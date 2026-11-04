@@ -38,6 +38,9 @@ if [ "$(source_hash .)" != "$(cat android/dex-source.sha256 2>/dev/null)" ]; the
     exit 1
 fi
 
+shim=mdict.koplugin/kindle/kindle_shim.so
+[ -f "$shim" ] || { echo "missing $shim: run kindle/build.sh" >&2; exit 1; }
+
 mkdir -p dist
 out="dist/mdict.koplugin-$version.zip"
 rm -f "$out"

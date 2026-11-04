@@ -281,6 +281,12 @@ function MDict:menuItems()
             keep_menu_open = true,
             callback = function() require("mdict/kindlecheck").show(Updater.version()) end,
         }
+        -- starts Amazon's browser once to see whether it can lay out entries (mdict/kindletest.lua)
+        items[#items + 1] = {
+            text = _("Kindle browser test (experimental)"),
+            keep_menu_open = true,
+            callback = function() require("mdict/kindletest").show(Updater.version()) end,
+        }
     end
     return items
 end
