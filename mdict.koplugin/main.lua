@@ -274,6 +274,14 @@ function MDict:menuItems()
         },
         Updater.menuItem(),
     }
+    if require("device"):isKindle() then
+        -- a read-only report for the Kindle renderer under development (mdict/kindlecheck.lua)
+        items[#items + 1] = {
+            text = _("Kindle browser check"),
+            keep_menu_open = true,
+            callback = function() require("mdict/kindlecheck").show(Updater.version()) end,
+        }
+    end
     return items
 end
 

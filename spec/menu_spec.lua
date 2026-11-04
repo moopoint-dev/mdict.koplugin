@@ -130,6 +130,22 @@ describe("menus", function()
         assert.is_nil(store.mdict.auto_update)
     end)
 
+    it("offers the Kindle browser check on Kindles only", function()
+        local plugin = setmetatable({}, { __index = MDict })
+        local function has_check()
+            for _, it in ipairs(plugin:menuItems()) do
+                if it.text == "Kindle browser check" then return it end
+            end
+        end
+        assert.is_nil(has_check())
+        local Device = require("device")
+        Device.isKindle = function() return true end
+        local item = has_check()
+        Device.isKindle = function() return false end
+        assert.truthy(item)
+        assert.is_function(item.callback)
+    end)
+
     it("describes index states in the dictionary list", function()
         local DictList = require("widgets/dictlist")
         local Indexer = package.loaded["mdict/indexer"]

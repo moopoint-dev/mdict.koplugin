@@ -122,6 +122,10 @@ note; a notification says when an index you were waiting for is ready.
 - **Rebuild indexes**, **Clear extracted resources**, **Rescan**.
 - **Updates**: the installed version, *Check for updates*, and *Check for updates
   automatically* (on by default).
+- **Kindle browser check** (Kindles only): a report for the Kindle renderer being
+  developed, which would use the browser that Kindle firmware 5.16.4 and later ships.
+  It only reads system information (memory, Amazon's services, the browser's files),
+  starts nothing, and saves the report as `koreader/mdict-kindle-report.txt`.
 
 Override files, for fixes a dictionary's own CSS or markup needs on an e-reader:
 
@@ -141,6 +145,7 @@ install 0.2.0 by hand over 0.1.0).
 
 - *Check for updates* asks GitHub for the latest release, turning Wi-Fi on if needed,
   and offers to install a newer one.
+- Pre-releases (test builds) are never offered; install them by hand.
 - Automatic checks run at most once a day: a minute after KOReader starts, when it
   connects to a network, or when the device wakes up. They only run when the device
   is already connected (Wi-Fi is never turned on for them), in the background, and

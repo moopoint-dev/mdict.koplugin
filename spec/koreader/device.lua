@@ -11,4 +11,5 @@ function Device:hasKeys() return false end
 function Device:hasEinkScreen() return true end
 function Device:hasDPad() return false end
 function Device:hasKeyboard() return false end
+function Device:isKindle() return false end
 return Device
