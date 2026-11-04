@@ -123,6 +123,7 @@
   //    links, and not elements that draw something of their own.
   var CLIP = (window.CSS && CSS.supports && CSS.supports("overflow", "clip")) ? "clip" : "visible";
   var BLOCK_LEVEL = { block: 1, "flow-root": 1, "list-item": 1, table: 1, flex: 1, grid: 1 };
+  var RUBY_PARTS = { RT: 1, RP: 1, RB: 1, RTC: 1 };
   var CONTENTS = "data-mdict-contents";
   function fragmentable(zoom) {
     var all = zoom.getElementsByTagName("*"), styles = new Map(), unwrap = new Set(), fixes = [];
@@ -135,7 +136,10 @@
     // reads every style first: a write in between would make each read lay out again
     for (var i = 0; i < all.length; i++) {
       var e = all[i], cs = style(e);
-      if (BLOCK_LEVEL[cs.display] && cs.float === "none" && cs.position !== "absolute" && cs.position !== "fixed") {
+      // Chromium before 121 lays ruby text out as a block (ruby > rt { display: block }):
+      // it is part of its ruby, which must stay whole.
+      if (BLOCK_LEVEL[cs.display] && !RUBY_PARTS[e.tagName] && cs.float === "none" && cs.position !== "absolute"
+          && cs.position !== "fixed") {
         for (var p = e.parentElement; p && p !== zoom && !unwrap.has(p); p = p.parentElement) {
           var ps = style(p);
           if (ps.display !== "inline" || !plainInline(p, ps, style(p.parentElement))) break;
@@ -163,7 +167,7 @@
   // sets for itself alone (as opposed to what its content inherits) is lost when it
   // is left out of the layout.
   function plainInline(e, cs, parent) {
-    if (e.tagName === "A" || ATOMIC[e.tagName]) return false;
+    if (e.tagName === "A" || e.tagName === "RUBY" || ATOMIC[e.tagName]) return false;
     if (cs.position !== "static" || cs.verticalAlign !== "baseline" || cs.unicodeBidi !== "normal") return false;
     if (cs.writingMode !== parent.writingMode || cs.textCombineUpright && cs.textCombineUpright !== "none") return false;
     if (cs.textDecorationLine !== "none" || cs.backgroundImage !== "none" || !clear(cs.backgroundColor)) return false;

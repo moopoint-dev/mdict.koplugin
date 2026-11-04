@@ -209,4 +209,22 @@ describe("Kindle browser test", function()
         assert.equal("closed", r.closed)
         assert.is_nil(io.open(work .. "/w/page.html", "rb")) -- cleaned up
     end)
+
+    real("keeps ruby whole where the browser lays ruby text out as a block", function()
+        local work = helper.tmpdir("kindle-test-ruby")
+        local cfg = {
+            root = false, host_work = work .. "/w", work = work .. "/w", exe = chromium,
+            args = { "--headless=new", "--no-sandbox", "--remote-debugging-pipe",
+                     "--user-data-dir=" .. work .. "/w/profile", "about:blank" },
+            env = { "HOME=" .. work .. "/w/profile", "PATH=/usr/bin:/bin" },
+            -- what Chromium before 121 does by itself
+            samples = { { name = "ruby", writing = "vertical", html = "<style>ruby{display:inline}rt{display:block}</style>"
+                .. "<p><span>「<ruby>友人<rt>ゆうじん</rt></ruby>に会う」</span></p>" } },
+            inspect = "document.querySelectorAll('ruby[data-mdict-contents]').length + ' of '"
+                .. " + document.querySelectorAll('ruby').length",
+        }
+        local r = Test.run(cfg, {})
+        assert.is_true(r.ok, tostring(r.error))
+        assert.equal("0 of 1", r.samples[1].inspect)
+    end)
 end)
