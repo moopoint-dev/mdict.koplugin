@@ -57,6 +57,7 @@ describe("Kindle browser check", function()
         Check.root = fake_kindle()
         local df = function(path)
             if path:find("/mnt/us$") then return 3000 * 1048576, 2100 * 1048576, 2048 * 1048576 end
+            if path:find("/tmp$") then return 64 * 1048576, 60 * 1048576 end -- KOReader 2026.07: no 3rd value
         end
         local r = Check.collect({ plugin_version = "0.2.3-beta.1", koreader_version = "v2026.07.1",
             model = "KindlePaperWhite4", is_kindle = true, screen = { w = 1072, h = 1448, dpi = 300 }, df = df })
@@ -75,7 +76,7 @@ describe("Kindle browser check", function()
         has("Browser launcher: /usr/bin/browser\n")
         has("System fonts: 2 files in /usr/java/lib/fonts\n")
         has("X display socket: present\n")
-        has("Storage: /mnt/us 2048 MB free of 3000 MB\n")
+        has("Storage: /mnt/us 2048 MB free of 3000 MB; /tmp 60 MB free of 64 MB\n")
         has("  X server: X running, 14 MB\n")
         has("  window manager: awesome stopped, 6 MB\n")
         has("  framework: cvm stopped, 50 MB\n")

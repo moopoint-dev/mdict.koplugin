@@ -124,10 +124,12 @@ end
 
 local function free_space(path, df)
     if not fs.isDir(p(path)) then return nil end
-    local total, _, available
-    if df then total, _, available = df(p(path)) end
+    local total, free, available
+    if df then total, free, available = df(p(path)) end
     if not total then return nil end
-    return string.format("%s %s free of %s", path, mb(available), mb(total))
+    -- KOReader up to 2026.07 gives only the total and free bytes, without what is
+    -- available to non-root users.
+    return string.format("%s %s free of %s", path, mb(available or free), mb(total))
 end
 
 --- The report, as text.
