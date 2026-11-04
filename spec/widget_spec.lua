@@ -3,15 +3,17 @@ Runs KOReader's own HtmlBoxWidget/ScrollHtmlWidget code (from a KOReader
 checkout) with the plugin's WebView widgets on top, rendering through
 headless Chromium. Needs:
   KOREADER_FRONTEND=<koreader>/frontend
-  MDICT_CHROMIUM_BRIDGE=<repo>/tools/chromium-bridge/bridge.js (and NODE_PATH)
+  MDICT_CHROMIUM=<a Chromium binary> (driven over its DevTools pipe, renderers/cdp_bridge.lua),
+  or MDICT_CHROMIUM_BRIDGE=<repo>/tools/chromium-bridge/bridge.js (and NODE_PATH)
 ]]
 local helper = require("spec.helper")
 local frontend = os.getenv("KOREADER_FRONTEND")
 local bridge_js = os.getenv("MDICT_CHROMIUM_BRIDGE")
+local chromium = os.getenv("MDICT_CHROMIUM")
 
-if not (frontend and bridge_js) then
+if not (frontend and (bridge_js or chromium)) then
     describe("WebView widgets", function()
-        pending("set KOREADER_FRONTEND and MDICT_CHROMIUM_BRIDGE to run")
+        pending("set KOREADER_FRONTEND and MDICT_CHROMIUM (or MDICT_CHROMIUM_BRIDGE) to run")
     end)
     return
 end
@@ -37,8 +39,18 @@ local WebScrollWidget = require("widgets/webscrollwidget")
 describe("WebView widgets", function()
     local bridge, renderer, dict
     setup(function()
-        bridge = assert(ChromiumBridge.new({ script = bridge_js, node_path = os.getenv("NODE_PATH"), dpr = 1,
-                                             tmpdir = helper.tmpdir("wcap") }))
+        if bridge_js then
+            bridge = assert(ChromiumBridge.new({ script = bridge_js, node_path = os.getenv("NODE_PATH"), dpr = 1,
+                                                 tmpdir = helper.tmpdir("wcap") }))
+        else
+            local profile = helper.tmpdir("wprofile")
+            local cdp = assert(require("renderers/cdp_pipe").spawn({ exe = chromium,
+                args = { "--headless=new", "--no-sandbox", "--remote-debugging-pipe", "--hide-scrollbars",
+                         "--user-data-dir=" .. profile, "about:blank" },
+                env = { "HOME=" .. profile, "PATH=/usr/bin:/bin" } }))
+            bridge = assert(require("renderers/cdp_bridge").new({ cdp = cdp, dpr = 1, max_slots = 3,
+                decode = require("renderers/png").decodeInto }))
+        end
         dict = Dictionary.new({ path = helper.fixtures() .. "/basic.mdx", cache_dir = helper.tmpdir("wcache"),
                                 title = "Basic" })
         renderer = WebRenderer.new({ bridge = bridge, resolve = function(_, path) return dict:resource(path) end })

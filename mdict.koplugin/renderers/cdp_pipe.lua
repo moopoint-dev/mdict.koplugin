@@ -112,18 +112,33 @@ function Cdp.spawn(opts)
     return self
 end
 
-function Cdp:send(method, params, session)
+function Cdp:_write(data)
     if not self.wfd then error("browser pipe closed", 0) end
-    self.next_id = self.next_id + 1
-    local msg = { id = self.next_id, method = method, params = params or {} }
-    if session then msg.sessionId = session end
-    local data = json.encode(msg) .. "\0"
     local off = 0
     while off < #data do
         local n = C.write(self.wfd, ffi.cast("const char*", data) + off, #data - off)
         if n <= 0 then error("browser pipe closed", 0) end
         off = off + n
     end
+end
+
+--- Sends a command without waiting for its reply. Returns its id.
+function Cdp:send(method, params, session)
+    if not self.wfd then error("browser pipe closed", 0) end
+    self.next_id = self.next_id + 1
+    local msg = { id = self.next_id, method = method, params = params or {} }
+    if session then msg.sessionId = session end
+    self:_write(json.encode(msg) .. "\0")
+    return self.next_id
+end
+
+--- Like send, with params already given as JSON text (for bodies of megabytes, which
+-- would gain nothing from passing through the encoder).
+function Cdp:sendRaw(method, params_json, session)
+    if not self.wfd then error("browser pipe closed", 0) end
+    self.next_id = self.next_id + 1
+    self:_write('{"id":' .. self.next_id .. ',"method":' .. json.encode(method)
+        .. (session and (',"sessionId":' .. json.encode(session)) or "") .. ',"params":' .. params_json .. "}\0")
     return self.next_id
 end
 

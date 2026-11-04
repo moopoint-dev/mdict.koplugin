@@ -16,9 +16,7 @@ local ffi = require("ffi")
 local fs = require("mdict/fs")
 local json = require("mdict/json")
 local monotonic = require("mdict/clock")
-local Cdp = require("renderers/cdp_pipe") -- also declares poll()
-
-pcall(ffi.cdef, "int chmod(const char *path, unsigned int mode);")
+local KB = require("renderers/kindle_browser") -- also declares poll()
 
 local M = {}
 
@@ -246,13 +244,9 @@ function M.kindleConfig(screen, shim)
         },
         lipc_load = true,
         pid_file = p("/var/run/chromium.pid"),
+        proc = p("/proc"),
+        start_timeout = M.START_TIMEOUT,
     }
-end
-
--- Asks the browser, as Amazon's app manager would, to load: it starts up faster then.
-local function lipc_load()
-    local ok = os.execute("lipc-set-prop -s com.lab126.browser load app://com.lab126.browser >/dev/null 2>&1")
-    return ok == 0 or ok == true
 end
 
 --- Runs the test. cfg: from kindleConfig(), or the specs' own (root = false runs without chroot;
@@ -268,35 +262,21 @@ function M.run(cfg, page_files, progress)
     local function fail(err) r.error = r.steps[#r.steps].name .. ": " .. tostring(err) return r end
 
     step("prepare")
-    fs.removeTree(cfg.host_work)
-    if not fs.mkdirp(cfg.host_work .. "/profile") then return fail("cannot create " .. cfg.host_work) end
-    ffi.C.chmod(cfg.host_work, tonumber("755", 8))
-    ffi.C.chmod(cfg.host_work .. "/profile", tonumber("777", 8)) -- the browser runs as user 9000
-    if cfg.shim then
-        local data = read(cfg.shim)
-        if not data or not write(cfg.host_work .. "/kindle_shim.so", data) then return fail("cannot copy the library") end
-        ffi.C.chmod(cfg.host_work .. "/kindle_shim.so", tonumber("755", 8))
-    end
+    local prepared, err = KB.prepare(cfg)
+    if not prepared then return fail(err) end
     local html = Document.build({ font_aliases = false, lang = "ja" })
     if not write(cfg.host_work .. "/page.html", html) then return fail("cannot write the page") end
 
     step("start")
-    local browser, err = Cdp.spawn({ exe = cfg.exe, args = cfg.args, env = cfg.env, root = cfg.root or nil,
-        log = cfg.host_work .. "/browser.log" })
+    local browser, started
+    browser, err, started = KB.start(cfg, r, t0)
+    browser = browser or started
     if not browser then return fail(err) end
-    r.pid = browser.pid
-    -- should memory run out, the kernel ends the browser first, not the Kindle's own software
-    if cfg.oom_adjust ~= false then write(p("/proc/" .. r.pid .. "/oom_score_adj"), "1000") end
     local function finish()
         step("close")
         r.mem_during = r.mem_during or meminfo()
-        r.closed, r.exit = browser:close(5)
-        r.log = read(cfg.host_work .. "/browser.log")
+        r.closed, r.exit, r.log = KB.stop(browser, cfg)
         r.total = monotonic() - t0
-        if cfg.pid_file and (read(cfg.pid_file) or ""):match("^%s*(%d+)") == tostring(r.pid) then
-            os.remove(cfg.pid_file)
-        end
-        fs.removeTree(cfg.host_work)
         return r
     end
     local function abort(e)
@@ -304,18 +284,7 @@ function M.run(cfg, page_files, progress)
         r.exit_early = browser:exitStatus()
         return finish()
     end
-
-    if cfg.lipc_load then
-        local deadline = monotonic() + 10
-        while monotonic() < deadline and not browser:exitStatus() do
-            if lipc_load() then r.load_at = monotonic() - t0 break end
-            sleep_ms(250)
-        end
-    end
-    local version
-    version, err = browser:call("Browser.getVersion", nil, nil, M.START_TIMEOUT - (monotonic() - t0))
-    if not version then return abort(err) end
-    r.version, r.ready_at = version.product, monotonic() - t0
+    if err then return abort(err) end
 
     step("open page")
     local page

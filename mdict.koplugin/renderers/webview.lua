@@ -47,6 +47,10 @@ function WebRenderer.new(opts)
         events = {},
         jobs = {}, -- coroutine -> job
         clock = 0,
+        -- a slow backend (the Kindle's browser) can ask for more time
+        load_timeout = opts.bridge.load_timeout or WebRenderer.LOAD_TIMEOUT,
+        op_timeout = opts.bridge.op_timeout or WebRenderer.OP_TIMEOUT,
+        capture_timeout = opts.bridge.capture_timeout or WebRenderer.CAPTURE_TIMEOUT,
     }, WebRenderer)
     return self
 end
@@ -215,7 +219,7 @@ function WebRenderer:op(slot_id, name, args, timeout)
     self.bridge:call(slot_id, id, name, json.encode(args or {}))
     local ev, err = self:_wait(function(e)
         return e.ev == "done" and e.id == id or e.ev == "error" and e.slot == slot_id and e.id == id
-    end, timeout or WebRenderer.OP_TIMEOUT)
+    end, timeout or self.op_timeout)
     if not ev then return nil, err end
     local r = ev.r
     if type(r) == "table" and r.error then return nil, r.error end
@@ -280,7 +284,7 @@ function WebRenderer:document(doc, w, h, avoid)
     if not slot.w or slot.w ~= w or slot.h ~= h then
         local t = monotonic()
         self.bridge:open(slot.id, w, h)
-        local ev, err = self:_wait(function(e) return e.ev == "opened" and e.slot == slot.id end, WebRenderer.LOAD_TIMEOUT)
+        local ev, err = self:_wait(function(e) return e.ev == "opened" and e.slot == slot.id end, self.load_timeout)
         if not ev then
             self.slots[slot.id] = nil
             return nil, "open: " .. tostring(err)
@@ -299,7 +303,7 @@ function WebRenderer:document(doc, w, h, avoid)
         for token, path in pairs(files) do file_map[token] = path end
         self.bridge:load(slot.id, "https://" .. doc.dict_id .. ".mdict.local/", html, doc.cache_root,
             json.encode(file_map))
-        local ev, err = self:_wait(function(e) return e.ev == "loaded" and e.slot == slot.id end, WebRenderer.LOAD_TIMEOUT)
+        local ev, err = self:_wait(function(e) return e.ev == "loaded" and e.slot == slot.id end, self.load_timeout)
         if not ev then
             slot.key = nil
             return nil, "load: " .. tostring(err)
@@ -339,7 +343,7 @@ function WebRenderer:setEntry(slot, entry)
         eink = entry.eink and true or false,
         runScripts = entry.run_scripts ~= false,
         skipScripts = json.array(entry.skip_scripts),
-    }, WebRenderer.OP_TIMEOUT)
+    }, self.op_timeout)
     if r then slot.pages, slot.page = r.pages, nil end
     if slot.trace then
         slot.trace.entry = (slot.trace.entry or 0) + ms(t0)
@@ -363,7 +367,7 @@ function WebRenderer:renderPage(slot, n, ptr)
     local t = monotonic()
     local id = self:_nextId()
     self.bridge:capture(slot.id, id, ptr, slot.w, slot.h)
-    local ev, err = self:_wait(function(e) return e.ev == "captured" and e.id == id end, WebRenderer.CAPTURE_TIMEOUT)
+    local ev, err = self:_wait(function(e) return e.ev == "captured" and e.id == id end, self.capture_timeout)
     if not ev then return nil, err end
     if not ev.ok then return nil, "capture failed" end
     if ev.renew then slot.renew = true end

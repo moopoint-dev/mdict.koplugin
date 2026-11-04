@@ -129,6 +129,12 @@ function MDict:onNetworkConnected()
     UIManager:scheduleIn(5, function() Updater.autoCheck("network") end)
 end
 
+-- The Kindle's browser is not left running while the Kindle sleeps.
+function MDict:onSuspend()
+    local Manager = require("renderers/manager")
+    if Manager.renderer and Manager.renderer.bridge.kindle then Manager.shutdown() end
+end
+
 function MDict:onResume()
     UIManager:scheduleIn(30, function() Updater.autoCheck("resume") end)
 end
@@ -378,19 +384,39 @@ function MDict:displayItems()
             return items
         end,
     }
-    return {
-        {
-            text = _("Render entries with the WebView"),
-            help_text = _("Lays entries out as a web browser does, so they look as their dictionary intends. "
-                .. "When off, KOReader's built-in HTML renderer is used."),
-            checked_func = function() return s.renderer ~= "mupdf" end,
+    local render_item = {
+        text = _("Render entries with the WebView"),
+        help_text = _("Lays entries out as a web browser does, so they look as their dictionary intends. "
+            .. "When off, KOReader's built-in HTML renderer is used."),
+        checked_func = function() return s.renderer ~= "mupdf" end,
+        callback = function()
+            s.renderer = s.renderer ~= "mupdf" and "mupdf" or nil
+            save_settings()
+            Manager.shutdown()
+            Manager.failed = nil
+        end,
+    }
+    if require("device"):isKindle() then
+        -- off by default: it starts Amazon's browser in the background (renderers/kindle_browser.lua)
+        render_item = {
+            text = _("Render entries with the Kindle's browser (experimental)"),
+            help_text = _("Lays entries out with the web browser of the Kindle's firmware (5.16 to 5.18), so they "
+                .. "look as their dictionary intends, with vertical text and the dictionary's scripts. The first "
+                .. "lookup starts the browser in the background, which takes a few seconds; it closes again after "
+                .. "ten minutes without a lookup, and when the Kindle sleeps. It needs about 100 MB of memory. "
+                .. "When off, or if the browser fails, KOReader's built-in HTML renderer is used. If the Kindle "
+                .. "behaves oddly, turn this off and restart the Kindle."),
+            checked_func = function() return s.kindle_browser == true end,
             callback = function()
-                s.renderer = s.renderer ~= "mupdf" and "mupdf" or nil
+                s.kindle_browser = not s.kindle_browser or nil
                 save_settings()
                 Manager.shutdown()
-                Manager.failed = nil
+                Manager.failed, Manager.notified = nil, false
             end,
-        },
+        }
+    end
+    return {
+        render_item,
         {
             text_func = function() return T(_("Text size: %1 %"), math.floor((s.zoom or 1) * 100 + 0.5)) end,
             help_text = _("Relative to KOReader's dictionary font size."),

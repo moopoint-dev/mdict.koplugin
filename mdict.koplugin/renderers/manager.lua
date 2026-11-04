@@ -1,10 +1,12 @@
 --[[--
 Chooses and owns the WebView renderer, and builds popup widgets with it.
 
-On Android the renderer is the system WebView, through the dex bridge. On
-desktops it is headless Chromium when MDICT_CHROMIUM_BRIDGE names
-tools/chromium-bridge/bridge.js (for development). Anywhere else, or when
-the WebView fails, MDict entries fall back to KOReader's MuPDF widget.
+On Android the renderer is the system WebView, through the dex bridge. On Kindles with
+firmware 5.16 to 5.18 it can be the Kindle's own browser (experimental, off by default:
+renderers/kindle_browser.lua). On desktops it is Chromium for development: over its DevTools
+pipe when MDICT_CHROMIUM names its binary, or through Playwright when MDICT_CHROMIUM_BRIDGE
+names tools/chromium-bridge/bridge.js. Anywhere else, or when the renderer fails, MDict
+entries fall back to KOReader's MuPDF widget.
 ]]
 
 local logger = require("logger")
@@ -20,11 +22,50 @@ local function plugin_dir()
     local src = debug.getinfo(1, "S").source
     return (src:match("^@(.*)/renderers/[^/]+$")) or "."
 end
+Manager.plugin_dir = plugin_dir
 
-local function make_bridge()
+local function info_log(...) logger.info("MDict:", ...) end
+
+-- The Kindle's browser as a bridge, when the reader turned it on and nothing stands in the way.
+local function kindle_bridge(state)
+    if not (state.settings and state.settings.kindle_browser) then return nil, "off" end
+    local KB = require("renderers/kindle_browser")
+    local Test = require("mdict/kindletest")
+    local shim = plugin_dir() .. "/kindle/kindle_shim.so"
+    KB.killOrphans()
+    local problems = Test.problems({ is_kindle = true, shim = shim })
+    local avail = KB.availableMemory()
+    if #problems == 0 and avail and avail < KB.MIN_MEMORY then
+        problems[1] = string.format("only %d MB of memory is available", math.floor(avail / 1048576))
+    end
+    if #problems > 0 then return nil, table.concat(problems, " ") end
+    local scr = require("device").screen
+    return KB.bridge({
+        shim = shim,
+        screen = scr and { w = scr:getWidth(), h = scr:getHeight() },
+        dpr = scr and scr.getDPI and scr:getDPI() / 160 or 2,
+        log = info_log,
+    })
+end
+
+local function make_bridge(state)
     local AndroidBridge = require("renderers/android_bridge")
     if AndroidBridge.isAvailable() then
         return AndroidBridge.new(plugin_dir() .. "/android/mdict-bridge.dex")
+    end
+    local Device = require("device")
+    if Device.isKindle and Device:isKindle() then return kindle_bridge(state) end
+    local chromium = os.getenv("MDICT_CHROMIUM")
+    if chromium and chromium ~= "" then
+        local Cdp = require("renderers/cdp_pipe")
+        local profile = (os.getenv("TMPDIR") or "/tmp") .. "/mdict-chromium-profile"
+        local cdp, err = Cdp.spawn({ exe = chromium,
+            args = { "--headless=new", "--no-sandbox", "--remote-debugging-pipe", "--hide-scrollbars",
+                     "--user-data-dir=" .. profile, "about:blank" },
+            env = { "HOME=" .. profile, "PATH=" .. (os.getenv("PATH") or "/usr/bin:/bin") } })
+        if not cdp then return nil, err end
+        return require("renderers/cdp_bridge").new({ cdp = cdp, max_slots = 3, log = info_log,
+            dpr = tonumber(os.getenv("MDICT_CHROMIUM_DPR")) or 1, decode = require("renderers/png").decodeInto })
     end
     local script = os.getenv("MDICT_CHROMIUM_BRIDGE")
     if script and script ~= "" then
@@ -35,16 +76,43 @@ local function make_bridge()
     return nil, "no WebView on this platform"
 end
 
+Manager.IDLE_CHECK = 60 -- seconds between checks whether an idle browser can be closed
+
+-- A browser that is only started for the plugin (the Kindle's) is closed once unused for a while.
+function Manager._idleCheck()
+    Manager.idle_scheduled = false
+    local r = Manager.renderer
+    if not (r and r.bridge.idle_close) then return end
+    local idle = require("mdict/clock")() - (r.bridge.last_use or 0)
+    if idle >= r.bridge.idle_close and next(r.jobs) == nil then
+        info_log("closing the idle browser after", math.floor(idle), "s")
+        Manager.shutdown()
+        return
+    end
+    Manager.idle_scheduled = true
+    require("ui/uimanager"):scheduleIn(Manager.IDLE_CHECK, Manager._idleCheck)
+end
+
 --- The renderer, created on first use; nil when entries should use MuPDF.
 function Manager.get(state)
-    if Manager.renderer then return Manager.renderer end
+    if Manager.renderer then
+        local b = Manager.renderer.bridge
+        if b.alive and not b:alive() then
+            Manager.disable("the browser ended")
+            return nil
+        end
+        b.last_use = require("mdict/clock")()
+        return Manager.renderer
+    end
     if Manager.failed then return nil end
     if state.settings and state.settings.renderer == "mupdf" then return nil end
-    local ok, bridge, err = pcall(make_bridge)
+    local ok, bridge, err = pcall(make_bridge, state)
     if not ok then bridge, err = nil, bridge end
     if not bridge then
         Manager.failed = tostring(err)
         logger.info("MDict: WebView renderer unavailable:", Manager.failed)
+        local Device = require("device")
+        if err ~= "off" and Device.isKindle and Device:isKindle() then Manager.notify(Manager.failed) end
         return nil
     end
     local WebRenderer = require("renderers/webview")
@@ -52,6 +120,7 @@ function Manager.get(state)
     Manager.renderer = WebRenderer.new({
         bridge = bridge,
         logger = logger,
+        max_slots = bridge.max_slots,
         resolve = function(dict_id, path)
             local d = state.library and state.library:byId(dict_id)
             return d and d:resource(path)
@@ -59,22 +128,38 @@ function Manager.get(state)
         schedule = function(seconds, fn) UIManager:scheduleIn(seconds, fn) end,
         unschedule = function(fn) UIManager:unschedule(fn) end,
     })
+    if bridge.kindle then
+        bridge.idle_close = require("renderers/kindle_browser").IDLE_CLOSE
+        bridge.last_use = require("mdict/clock")()
+        if not Manager.idle_scheduled then
+            Manager.idle_scheduled = true
+            UIManager:scheduleIn(Manager.IDLE_CHECK, Manager._idleCheck)
+        end
+    end
     return Manager.renderer
+end
+
+--- Tells the reader once per session that entries use the built-in renderer, and why.
+function Manager.notify(reason)
+    if Manager.notified then return end
+    Manager.notified = true
+    local Notification = require("ui/widget/notification")
+    local UIManager = require("ui/uimanager")
+    local _ = require("gettext")
+    local text = _("MDict: WebView rendering failed; using the built-in renderer.")
+    local Device = require("device")
+    if Device.isKindle and Device:isKindle() then
+        text = require("ffi/util").template(
+            _("MDict: the Kindle's browser cannot lay out entries (%1); using the built-in renderer."), tostring(reason))
+    end
+    UIManager:show(Notification:new{ text = text })
 end
 
 --- Gives up on the renderer for this session (after it failed on a real entry).
 function Manager.disable(reason)
     Manager.failed = reason or "failed"
     Manager.shutdown()
-    if not Manager.notified then
-        Manager.notified = true
-        local Notification = require("ui/widget/notification")
-        local UIManager = require("ui/uimanager")
-        local _ = require("gettext")
-        UIManager:show(Notification:new{
-            text = _("MDict: WebView rendering failed; using the built-in renderer."),
-        })
-    end
+    Manager.notify(Manager.failed)
 end
 
 function Manager.shutdown()
@@ -255,7 +340,9 @@ function Manager.widget(state, dql, r, opts)
     if not widget then
         if opts.background then return nil, err end
         logger.warn("MDict: WebView could not show the entry:", err)
-        if err == "timeout" or (err and err:find("^open")) or (err and err:find("^load")) then
+        local b = renderer.bridge
+        if err == "timeout" or (err and err:find("^open")) or (err and err:find("^load"))
+            or (b.alive and not b:alive()) then
             Manager.disable(err)
         end
         return nil
@@ -319,7 +406,8 @@ function Manager.prefetch(state, dql)
     Manager.dropPrefetch(dql)
     if not (r and r.mdict and not r.mdict_note) then return end
     local renderer = Manager.get(state)
-    if not (renderer and renderer.schedule) then return end
+    -- with one page (the Kindle's browser), laying out ahead would take the shown result's
+    if not (renderer and renderer.schedule) or renderer.max_slots < 2 then return end
     local avoid = {}
     local shown = dql.mdict_widget and dql.mdict_widget.htmlbox_widget
     if shown and shown.slot then avoid[shown.slot.id] = true end
