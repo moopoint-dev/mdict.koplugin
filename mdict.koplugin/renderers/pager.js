@@ -35,6 +35,10 @@
     overlays: [], // viewers scripts opened over the entry (see markOverlays)
   };
 
+  // CSS pixels left and right of a page of horizontal text (scaled with the entry), where what
+  // an entry hangs outside its lines stays in view: LDELC sets its sense numbers 0.2rem to the left.
+  var GUTTER = 4;
+
   function el(id) { return document.getElementById(id); }
   function arg(opId) { return JSON.parse(KOBridge.arg(opId) || "{}"); }
   function done(opId, result) { KOBridge.done(opId, JSON.stringify(result === undefined ? null : result)); }
@@ -668,6 +672,7 @@
       content().style.transform = "";
       content().style.clipPath = "";
       zoom.style.zoom = String(opts.zoom || 1);
+      document.documentElement.style.setProperty("--mdict-gutter", GUTTER * (opts.zoom || 1) + "px");
       zoom.innerHTML = opts.html || "";
       state.overlays = [];
       t.mark("html");

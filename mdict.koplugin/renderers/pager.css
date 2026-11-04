@@ -1,6 +1,9 @@
 /* Page geometry for the MDict pager. --mdict-page-w/h are set by pager.js
    from the viewport, which is exactly the popup's definition area. */
-:root { --mdict-page-w: 100vw; --mdict-page-h: 100vh; color-scheme: light only; }
+/* --mdict-gutter: room left and right of each page of horizontal text (set by pager.js) for
+   what a dictionary hangs a little outside its lines, such as sense numbers: a browser shows
+   it in the body's margin, a page here would cut it off (or show it on the page before). */
+:root { --mdict-page-w: 100vw; --mdict-page-h: 100vh; --mdict-gutter: 0px; color-scheme: light only; }
 html, body {
   margin: 0 !important; padding: 0 !important; border: 0 !important;
   width: var(--mdict-page-w) !important; height: var(--mdict-page-h) !important;
@@ -15,19 +18,24 @@ html, body {
   width: var(--mdict-page-w); height: var(--mdict-page-h);
   overflow: hidden;
 }
-/* horizontal-tb: one column per page, columns side by side */
+/* horizontal-tb: one column per page, columns side by side. Each column is a page less
+   the gutters, which the padding and the gap put on both sides of it. */
 #mdict-content {
   box-sizing: border-box;
   width: var(--mdict-page-w); height: var(--mdict-page-h);
-  column-width: var(--mdict-page-w); column-gap: 0; column-fill: auto;
+  padding: 0 var(--mdict-gutter);
+  column-width: calc(var(--mdict-page-w) - 2 * var(--mdict-gutter));
+  column-gap: calc(2 * var(--mdict-gutter)); column-fill: auto;
   writing-mode: horizontal-tb;
   overflow: visible;
 }
 /* vertical-rl: one column per page, columns stacked top to bottom; lines run
-   top to bottom and the text advances right to left inside each page */
+   top to bottom and the text advances right to left inside each page (no gutters: a
+   character less on each line, and nothing seen to hang above or below them) */
 body.mdict-vertical #mdict-content {
   writing-mode: vertical-rl;
-  column-width: var(--mdict-page-h);
+  padding: 0;
+  column-width: var(--mdict-page-h); column-gap: 0;
 }
 /* slices: one long strip, moved and clipped a page at a time by pager.js */
 body.mdict-slices #mdict-content { columns: auto; column-width: auto; height: auto; }
