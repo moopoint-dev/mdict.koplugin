@@ -44,7 +44,8 @@ function Library:scan(reserved)
                 local c = cache[path]
                 local title
                 if c and c.size == size and c.mtime == mtime then
-                    title = c.title:match("^%s*(.-)%s*$")
+                    -- cleaned again: older versions cached a title written as HTML as it was
+                    title = Reader.cleanTitle(c.title) or ""
                 else
                     local h, err = Reader.peekHeader(path)
                     if not h then

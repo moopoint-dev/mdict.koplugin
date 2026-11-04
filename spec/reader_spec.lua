@@ -36,6 +36,21 @@ describe("reader", function()
         d:close()
     end)
 
+    it("takes the text out of a title written as HTML", function()
+        -- as macOS's Cocoa HTML Writer writes it (现代汉语规范词典 from macOS)
+        local page = '<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">\n'
+            .. '<html>\n<head>\n  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">\n'
+            .. '  <title></title>\n  <style type="text/css">\n    p.p1 {margin: 0.0px; font: 12.0px Helvetica}\n'
+            .. '  </style>\n</head>\n<body>\n<p class="p1"><span class="s1">现代&amp;Co</span></p>\n'
+            .. '</body>\n</html>'
+        assert.are.equal("现代&Co", Reader.cleanTitle(page))
+        assert.are.equal("Named", Reader.cleanTitle("<html><head><TITLE>Named</TITLE></head><body>x</body></html>"))
+        assert.are.equal("Bold é 漢", Reader.cleanTitle("<b>Bold</b> &#233; &#x6F22;"))
+        assert.are.equal("Plain & simple", Reader.cleanTitle("Plain & simple"))
+        assert.is_nil(Reader.cleanTitle("<p> </p>"))
+        assert.is_nil(Reader.cleanTitle("  Title (No HTML code allowed)"))
+    end)
+
     it("reads UTF-16 keys and binary resources from .mdd", function()
         local d = assert(Reader.open(fx .. "/basic.mdd"))
         assert.is_true(d.is_mdd)

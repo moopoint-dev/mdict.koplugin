@@ -265,10 +265,63 @@ local function read_header(f)
     return htext, header, 8 + hlen
 end
 
-local function header_title(header)
-    local t = header.Title and header.Title:match("^%s*(.-)%s*$")
+local function utf8_char(n)
+    if n < 0x80 then return string.char(n) end
+    if n < 0x800 then return string.char(0xC0 + math.floor(n / 0x40), 0x80 + n % 0x40) end
+    if n < 0x10000 then
+        return string.char(0xE0 + math.floor(n / 0x1000), 0x80 + math.floor(n / 0x40) % 0x40, 0x80 + n % 0x40)
+    end
+    return string.char(0xF0 + math.floor(n / 0x40000), 0x80 + math.floor(n / 0x1000) % 0x40,
+        0x80 + math.floor(n / 0x40) % 0x40, 0x80 + n % 0x40)
+end
+
+local ENTITIES = { amp = "&", lt = "<", gt = ">", quot = '"', apos = "'", nbsp = " " }
+
+-- A tag name as a case-insensitive pattern ("style" -> "[Ss][Tt][Yy][Ll][Ee]").
+local function ci(name)
+    return (name:gsub("%a", function(c) return "[" .. c:upper() .. c:lower() .. "]" end))
+end
+
+-- The text of a title written as HTML: macOS's Cocoa HTML Writer puts a whole page there,
+-- with the name in its <body>. Its <title> is taken if it has text, else its <body>.
+local function html_title(t)
+    if not t:find("<[%a!/?]") then return t end
+    local function inner(tag)
+        local _, a = t:find("<" .. ci(tag) .. "[%s>]")
+        if not a then return nil end
+        a = t:find(">", a, true) or #t
+        local b = t:find("</" .. ci(tag) .. "%s*>", a + 1)
+        return t:sub(a + 1, (b or #t + 1) - 1)
+    end
+    local function text(h)
+        if not h then return nil end
+        h = h:gsub("<!%-%-.-%-%->", "")
+        for _, tag in ipairs({ "head", "style", "script" }) do
+            h = h:gsub("<" .. ci(tag) .. "[%s>].-</" .. ci(tag) .. "%s*>", " ")
+        end
+        h = h:gsub("<[^>]*>", " "):gsub("&(#?x?%w+);", function(e)
+            if ENTITIES[e] then return ENTITIES[e] end
+            local n = e:match("^#[xX](%x+)$")
+            n = n and tonumber(n, 16) or tonumber(e:match("^#(%d+)$") or "")
+            if n and n > 0 and n < 0x110000 then return utf8_char(n) end
+        end)
+        h = h:gsub("%s+", " "):match("^%s*(.-)%s*$")
+        if h ~= "" then return h end
+    end
+    return text(inner("title")) or text(inner("body")) or text(t) or ""
+end
+
+--- A dictionary's title as its header has it: trimmed, the text of one written as HTML, and
+-- nil when that is empty or MdxBuilder's placeholder.
+function Reader.cleanTitle(t)
+    t = t and t:match("^%s*(.-)%s*$")
+    t = t and html_title(t)
     if not t or t == "" or t:find("^Title %(No HTML code allowed%)") then return nil end
     return t
+end
+
+local function header_title(header)
+    return Reader.cleanTitle(header.Title)
 end
 
 --- Reads only the header of a file: { header = {attr = value}, title = string|nil, is_mdd = bool }.

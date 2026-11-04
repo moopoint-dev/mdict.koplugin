@@ -217,6 +217,12 @@ describe("library", function()
         local lib3 = Library.new({ dirs = { dir }, cache_dir = cache })
         lib3:scan()
         assert.truthy(lib3:byTitle("Spaced"))
+        -- and a title written as HTML gives its text (现代汉语规范词典 from macOS)
+        fs.writeAtomic(cache .. "/titles.json", string.format('{"%s/broken.mdx":{"size":%d,"mtime":%d,'
+            .. '"title":"<html><head><title></title></head><body><p>Named</p></body></html>"}}', dir, size, mtime))
+        local lib4 = Library.new({ dirs = { dir }, cache_dir = cache })
+        lib4:scan()
+        assert.truthy(lib4:byTitle("Named"))
     end)
 end)
 
