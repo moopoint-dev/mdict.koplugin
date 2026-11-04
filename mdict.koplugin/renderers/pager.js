@@ -63,12 +63,72 @@
     root.style.setProperty("--mdict-page-h", state.H + "px");
   }
 
+  // Handlers an entry's scripts set for the page's DOMContentLoaded or load (Chambers 13th
+  // shows its entries only once its DOMContentLoaded handler has run). Entries are swapped
+  // into a page that loaded long before, so these events never come: the pager calls the
+  // handlers itself once the entry's scripts have run, as a browser would for each page.
+  // A handler an external script set is kept and called for each entry that has that script
+  // (the script runs once per document); one an inline script set is called once.
+  var READY_EVENTS = { DOMContentLoaded: true, load: true };
+  var ready = { handlers: [], src: undefined }; // src: the script running (null: inline)
+  function hookReady(target) {
+    var add = target.addEventListener;
+    target.addEventListener = function (type, fn) {
+      if (ready.src !== undefined && READY_EVENTS[type] === true && fn) {
+        ready.handlers.push({ type: type, fn: fn, target: this, src: ready.src });
+        return;
+      }
+      return add.apply(this, arguments);
+    };
+  }
+  hookReady(document);
+  hookReady(window);
+
+  // Runs fn as part of the script src (null: inline), catching the handlers it sets.
+  function asScript(src, fn) {
+    var onload = window.onload;
+    ready.src = src;
+    try { fn(); } finally {
+      ready.src = undefined;
+      if (window.onload !== onload && typeof window.onload === "function") {
+        ready.handlers.push({ type: "load", fn: window.onload, target: window, src: src });
+        window.onload = onload;
+      }
+    }
+  }
+
+  // Calls the ready handlers for an entry whose external scripts are srcs.
+  function fireReady(srcs) {
+    var all = ready.handlers.filter(function (h) { return h.src === null || srcs[h.src]; });
+    var kept = ready.handlers.filter(function (h) { return h.src !== null; });
+    ready.handlers = [];
+    ["DOMContentLoaded", "load"].forEach(function (type) {
+      // a handler may set more: they run once, in turn
+      for (var i = 0; i < all.length; i++) {
+        var h = all[i];
+        if (h.type !== type) continue;
+        try {
+          asScript(null, function () {
+            if (typeof h.fn === "function") h.fn.call(h.target, new Event(type));
+            else if (h.fn && typeof h.fn.handleEvent === "function") h.fn.handleEvent(new Event(type));
+          });
+        } catch (e) { /* a broken handler must not stop the entry */ }
+        if (ready.handlers.length) {
+          all = all.concat(ready.handlers.map(function (n) { n.src = null; return n; }));
+          ready.handlers = [];
+        }
+      }
+    });
+    ready.handlers = kept;
+  }
+
   // Runs the entry's scripts in document order. innerHTML does not execute
   // them, so each one is re-created. External scripts run once per document.
   function runScripts(container, opts) {
     var skip = Array.isArray(opts.skipScripts) ? opts.skipScripts : [];
     var scripts = Array.prototype.slice.call(container.querySelectorAll("script"));
     var chain = Promise.resolve();
+    var srcs = {}, any = false;
     scripts.forEach(function (old) {
       var src = old.getAttribute("src");
       old.parentNode.removeChild(old);
@@ -76,6 +136,7 @@
       if (src) {
         var name = src.split(/[\\/]/).pop().split(/[?#]/)[0];
         if (skip.indexOf(name) >= 0) return;
+        srcs[src] = any = true;
         if (state.loadedScripts[src]) return;
         state.loadedScripts[src] = true;
         state.scripts = true;
@@ -83,24 +144,36 @@
           return withTimeout(new Promise(function (resolve) {
             var s = document.createElement("script");
             s.src = src;
-            s.onload = s.onerror = function () { resolve(); };
+            // it runs just before onload: its handlers are caught from now until then
+            var onload = window.onload;
+            ready.src = src;
+            s.onload = s.onerror = function () {
+              ready.src = undefined;
+              if (window.onload !== onload && typeof window.onload === "function") {
+                ready.handlers.push({ type: "load", fn: window.onload, target: window, src: src });
+                window.onload = onload;
+              }
+              resolve();
+            };
             document.head.appendChild(s);
-          }), 1500);
+          }), 1500).then(function () { ready.src = undefined; });
         });
       } else {
         var code = old.textContent;
-        state.scripts = true;
+        state.scripts = any = true;
         chain = chain.then(function () {
           try {
-            var s = document.createElement("script");
-            s.textContent = code;
-            document.head.appendChild(s);
-            document.head.removeChild(s);
+            asScript(null, function () {
+              var s = document.createElement("script");
+              s.textContent = code;
+              document.head.appendChild(s);
+              document.head.removeChild(s);
+            });
           } catch (e) { /* a broken inline script must not stop the entry */ }
         });
       }
     });
-    return chain;
+    return chain.then(function () { if (any) fireReady(srcs); });
   }
 
   function waitForImages(container, ms) {
