@@ -798,12 +798,30 @@
   // With link: a tap on a link, offered to the entry's scripts first. It is
   // handled only when a script takes the click over (a picture link that opens
   // a viewer); otherwise KOReader follows the link.
+  // The element of a viewer under a point: the last one in document order whose box holds it.
+  function hitInside(root, x, y) {
+    var all = root.getElementsByTagName("*"), best = root;
+    for (var i = 0; i < all.length; i++) {
+      var r = all[i].getBoundingClientRect();
+      if (r.width > 0 && r.height > 0 && x >= r.left && x < r.right && y >= r.top && y < r.bottom && shown(all[i])) {
+        best = all[i];
+      }
+    }
+    return best;
+  }
+
   MDict.tap = function (opId) {
     var a = arg(opId), d = state.dpr, x = a.x / d, y = a.y / d;
     var zoom = el("mdict-zoom");
     var hit = document.elementFromPoint(x, y);
-    if (hit && !zoom.contains(hit)) hit = null;
     var overlay = openOverlay();
+    // Chromium before LayoutNG (the Kindle's 75) can miss a fixed viewer inside the
+    // columns when hit testing: a tap within its box is on it
+    if (overlay && !(hit && overlay.contains(hit))) {
+      var o = overlay.getBoundingClientRect();
+      if (x >= o.left && x < o.right && y >= o.top && y < o.bottom) hit = hitInside(overlay, x, y);
+    }
+    if (hit && !zoom.contains(hit)) hit = null;
     var inOverlay = !!(hit && overlay && overlay.contains(hit));
     var target;
     if (a.link) target = hit && hit.closest("a[href]");
