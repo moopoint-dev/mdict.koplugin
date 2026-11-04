@@ -5,10 +5,10 @@ describe("document", function()
     it("aliases dictionary fonts to local fonts and user files", function()
         local css, files = Document.fontAliasCss({ ["serif-cjk"] = { file = "/fonts/Mincho.otf", names = { "My Mincho" } } },
             { ["Hiragino Mincho ProN"] = "serif-cjk", Verdana = "sans" })
-        local want = 'font-family:"Hiragino Mincho ProN";font-weight:100 549;'
+        local want = 'font-family:"Hiragino Mincho ProN";font-weight:400;'
             .. 'src:url(/__file__/f1.otf), local("My Mincho"), local("Noto Serif CJK JP")'
         assert.truthy(css:find(want, 1, true))
-        assert.truthy(css:find('font-family:"Verdana";font-weight:550 900;src:local("Roboto Bold")', 1, true))
+        assert.truthy(css:find('font-family:"Verdana";font-weight:700;src:local("Roboto Bold")', 1, true))
         assert.same({ ["f1.otf"] = "/fonts/Mincho.otf" }, files)
     end)
 
@@ -57,14 +57,17 @@ describe("document", function()
         local cjk = Document.USER_FONT_RANGES.cjk
         -- after the dictionary's stylesheet, so its faces win for the range
         assert.truthy(html:find("style.css", 1, true) < html:find("mdict-user-font", 1, true))
-        assert.truthy(css:find('font-family:"MDict User";font-weight:100 900;src:url(/__file__/' .. token
+        assert.truthy(css:find('font-family:"MDict User";font-weight:400;src:url(/__file__/' .. token
             .. ');unicode-range:' .. cjk, 1, true))
-        -- no bold file: the dictionary's bold and italic faces stay
+        -- no bold file: the dictionary's own bold and italic web fonts stay
         assert.falsy(css:find('"MK Sans"', 1, true))
-        assert.truthy(css:find('font-family:"Hiragino Mincho ProN";font-weight:100 549;src:url', 1, true))
+        assert.truthy(css:find('font-family:"Hiragino Mincho ProN";font-weight:400;src:url', 1, true))
         -- a local font keeps serving the characters outside the range
-        assert.truthy(css:find('font-family:"Local Font";font-weight:100 549;src:local("Local Font")}', 1, true))
+        assert.truthy(css:find('font-family:"Local Font";font-weight:400;src:local("Local Font")}', 1, true))
         assert.truthy(html:find('body{font-family:"MDict User",serif}', 1, true))
+        -- and bold text takes the regular faces, which the WebView emboldens: a face declared
+        -- bold, as local("Local Font") or the alias's Noto Serif Bold, would be drawn as it is
+        assert.falsy(html:find("font-weight:700", 1, true))
         local _, key2 = Document.build({ stylesheets = { "style.css" }, css_families = fam,
             user_font = { file = "/fonts/Mine.ttf", bold_file = "/fonts/Mine-Bold.ttf", scope = "latin" } })
         assert.are_not.equal(key, key2)
@@ -72,11 +75,17 @@ describe("document", function()
             user_font = { file = "/fonts/Mine.ttf", bold_file = "/fonts/Mine-Bold.ttf" } })
         assert.truthy(html3:find('font-family:"MK Sans";font-weight:700;src:url', 1, true))
         assert.falsy(html3:find("font-style:italic", 1, true))
+        -- the local font's own bold face serves bold text outside the range
+        assert.truthy(html3:find('font-family:"Local Font";font-weight:700;'
+            .. 'src:local("Local Font Bold"), local("LocalFont-Bold")}', 1, true))
+        assert.truthy(html3:find('font-family:"Hiragino Mincho ProN";font-weight:700;src:local', 1, true))
         -- with an italic file, italic text gets it too (WebView 91 would not slant the regular face)
         local html4 = Document.build({ stylesheets = { "style.css" }, css_families = fam,
             user_font = { file = "/fonts/Mine.ttf", italic_file = "/fonts/Mine-It.ttf" } })
         assert.truthy(html4:find('font-family:"MK Sans";font-weight:normal;font-style:italic;src:url', 1, true))
-        assert.truthy(html4:find('font-family:"MDict User";font-weight:100 900;font-style:italic;src:url', 1, true))
-        assert.truthy(html4:find('font-family:"Local Font";font-weight:100 549;font-style:italic;src:url', 1, true))
+        assert.truthy(html4:find('font-family:"MDict User";font-weight:400;font-style:italic;src:url', 1, true))
+        assert.truthy(html4:find('font-family:"Local Font";font-weight:400;font-style:italic;src:url', 1, true))
+        assert.truthy(html4:find('font-family:"Local Font";font-weight:400;font-style:italic;'
+            .. 'src:local("Local Font Italic"), local("LocalFont-Italic")}', 1, true))
     end)
 end)
