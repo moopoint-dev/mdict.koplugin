@@ -127,10 +127,13 @@ note; a notification says when an index you were waiting for is ready.
   default, in *Display*): lays entries out with the web browser of the Kindle's
   firmware (5.16 to 5.18, Chromium 75 in Amazon's `/chroot`), as the WebView does on
   Android: the dictionary's CSS, vertical text and the entry's scripts. The first
-  lookup starts the browser in the background (a few seconds); it is closed after ten
-  minutes without a lookup and when the Kindle sleeps. It needs about 100 MB of memory
-  beside KOReader. If it cannot start, or ends, entries fall back to KOReader's renderer
-  for the session. Turn it off and restart the Kindle if anything misbehaves.
+  lookup starts the browser, which takes about 20 seconds on a Paperwhite 4; it then
+  stays open, also while the Kindle sleeps, and is closed after twenty minutes without
+  a lookup. Pages come from the browser's screencast (under a second each on the
+  emulated Paperwhite), with a screenshot when no frame comes. The browser uses about
+  70 MB of memory and starts only when 80 MB are free. If it cannot start, or ends,
+  entries fall back to KOReader's renderer for the session. Turn it off and restart the
+  Kindle if anything misbehaves.
 - **Kindle browser check** (Kindles only): a report for the Kindle renderer, about the
   browser that Kindle firmware 5.16.4 and later ships.
   It only reads system information (memory, Amazon's services, the browser's files),

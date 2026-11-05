@@ -16,7 +16,10 @@ end
 --- Draws a PNG into w*h RGBA pixels at ptr. Returns true, or nil and an error.
 -- A screenshot can be a pixel or two off the page size (a CSS size times a fractional pixel
 -- ratio): the page then gets what overlaps, and white for the rest.
-function M.decodeInto(data, ptr, w, h)
+-- extra: rows below the page in the image (a strip of one grey: see renderers/cdp_bridge.lua);
+-- its grey is returned after true.
+function M.decodeInto(data, ptr, w, h, extra)
+    extra = extra or 0
     if data:sub(1, 8) ~= "\137PNG\r\n\26\n" then return nil, "not a PNG" end
     local pos, iw, ih, depth, ctype, interlace = 9, 0, 0, 0, 0, 0
     local idat = {}
@@ -33,8 +36,8 @@ function M.decodeInto(data, ptr, w, h)
         end
         pos = pos + 12 + len
     end
-    if math.abs(iw - w) > 2 or math.abs(ih - h) > 2 then
-        return nil, string.format("PNG is %dx%d, not %dx%d", iw, ih, w, h)
+    if math.abs(iw - w) > 2 or math.abs(ih - h - extra) > 2 then
+        return nil, string.format("PNG is %dx%d, not %dx%d", iw, ih, w, h + extra)
     end
     local bpp = ({ [0] = 1, [2] = 3, [4] = 2, [6] = 4 })[ctype]
     if depth ~= 8 or not bpp or interlace ~= 0 then return nil, "unsupported PNG" end
@@ -44,10 +47,12 @@ function M.decodeInto(data, ptr, w, h)
     if n ~= (stride + 1) * ih then return nil, "short PNG data" end
     local out = ffi.cast("uint8_t *", ptr)
     local cw = math.min(w, iw)
-    if iw ~= w or ih ~= h then ffi.fill(out, w * h * 4, 255) end
+    if iw < w or ih < h then ffi.fill(out, w * h * 4, 255) end
+    local mark_y = extra > 0 and ih - 1 - math.floor(extra / 4) or -1
+    local grey
     local prev = ffi.new("uint8_t[?]", stride)
     local cur = ffi.new("uint8_t[?]", stride)
-    for y = 0, math.min(h, ih) - 1 do
+    for y = 0, (extra > 0 and ih or math.min(h, ih)) - 1 do
         local line = raw + y * (stride + 1)
         local f = line[0]
         line = line + 1
@@ -70,7 +75,15 @@ function M.decodeInto(data, ptr, w, h)
             cur[x] = bit.band(v, 255)
         end
         local o = out + y * w * 4
-        if bpp >= 3 then
+        if y == mark_y then
+            local sum, count = 0, 0
+            for x = math.floor(iw / 4), math.floor(iw * 3 / 4) do
+                sum, count = sum + cur[x * bpp], count + 1 -- red, or grey
+            end
+            grey = count > 0 and sum / count or nil
+        end
+        if y >= h then -- luacheck: ignore 542 (the strip is not part of the page)
+        elseif bpp >= 3 then
             for x = 0, cw - 1 do
                 local s = x * bpp
                 o[x * 4], o[x * 4 + 1], o[x * 4 + 2] = cur[s], cur[s + 1], cur[s + 2]
@@ -85,7 +98,7 @@ function M.decodeInto(data, ptr, w, h)
         end
         prev, cur = cur, prev
     end
-    return true
+    return true, grey
 end
 
 return M

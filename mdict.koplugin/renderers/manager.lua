@@ -39,13 +39,29 @@ local function kindle_bridge(state)
         problems[1] = string.format("only %d MB of memory is available", math.floor(avail / 1048576))
     end
     if #problems > 0 then return nil, table.concat(problems, " ") end
+    -- the first lookup waits for the browser (14 s on a Paperwhite 4) and its first page
+    local UIManager = require("ui/uimanager")
+    local _ = require("gettext")
+    Manager.starting = require("ui/widget/infomessage"):new{
+        text = _("Starting the Kindle's browser to lay out entries. The first lookup takes about 20 seconds; "
+            .. "the next ones are quicker."),
+    }
+    UIManager:show(Manager.starting)
+    if UIManager.forceRePaint then UIManager:forceRePaint() end
     local scr = require("device").screen
-    return KB.bridge({
+    -- Pages come from the browser's screencast, whose frames are in device pixels only at a
+    -- whole pixel ratio: 2 on a 300 ppi Kindle, with entries zoomed to the size Android's 1.875
+    -- gives them.
+    local ratio = scr and scr.getDPI and scr:getDPI() / 160 or 2
+    local dpr = math.max(1, math.floor(ratio + 0.5))
+    local bridge, err = KB.bridge({
         shim = shim,
         screen = scr and { w = scr:getWidth(), h = scr:getHeight() },
-        dpr = scr and scr.getDPI and scr:getDPI() / 160 or 2,
+        dpr = dpr,
         log = info_log,
     })
+    if bridge then bridge.zoom = ratio / dpr end
+    return bridge, err
 end
 
 local function make_bridge(state)
@@ -65,7 +81,8 @@ local function make_bridge(state)
             env = { "HOME=" .. profile, "PATH=" .. (os.getenv("PATH") or "/usr/bin:/bin") } })
         if not cdp then return nil, err end
         return require("renderers/cdp_bridge").new({ cdp = cdp, max_slots = 3, log = info_log,
-            dpr = tonumber(os.getenv("MDICT_CHROMIUM_DPR")) or 1, decode = require("renderers/png").decodeInto })
+            dpr = tonumber(os.getenv("MDICT_CHROMIUM_DPR")) or 1, decode = require("renderers/png").decodeInto,
+            screencast = os.getenv("MDICT_CHROMIUM_SCREENSHOTS") ~= "1" and { format = "png" } or nil })
     end
     local script = os.getenv("MDICT_CHROMIUM_BRIDGE")
     if script and script ~= "" then
@@ -108,6 +125,12 @@ function Manager.get(state)
     if state.settings and state.settings.renderer == "mupdf" then return nil end
     local ok, bridge, err = pcall(make_bridge, state)
     if not ok then bridge, err = nil, bridge end
+    if Manager.starting then
+        -- closed once the lookup that started the browser is shown
+        local msg, UIManager = Manager.starting, require("ui/uimanager")
+        Manager.starting = nil
+        UIManager:nextTick(function() UIManager:close(msg) end)
+    end
     if not bridge then
         Manager.failed = tostring(err)
         logger.info("MDict: WebView renderer unavailable:", Manager.failed)
@@ -311,7 +334,7 @@ function Manager.widget(state, dql, r, opts)
         entry = {
             html = body .. '<div class="mdict-query">' .. query .. "</div>",
             anchor = r.mdict.anchor,
-            zoom = ((dql.dict_font_size or 20) / 20) * (settings.zoom or 1),
+            zoom = ((dql.dict_font_size or 20) / 20) * (settings.zoom or 1) * (renderer.bridge.zoom or 1),
             eink = eink,
             writing = writing,
             pagination = Manager.dictSetting(settings, d.id, "pagination", "auto"),

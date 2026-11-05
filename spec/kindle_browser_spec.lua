@@ -48,7 +48,7 @@ end)
 
 describe("Kindle browser in the manager", function()
     local saved = {}
-    local scheduled, shown, kb_calls
+    local scheduled, shown, kb_calls, closed
     local Manager
     local fake_bridge
 
@@ -58,7 +58,7 @@ describe("Kindle browser in the manager", function()
     end
 
     before_each(function()
-        scheduled, shown, kb_calls = {}, {}, {}
+        scheduled, shown, kb_calls, closed = {}, {}, {}, {}
         stub("device", { isKindle = function() return true end, hasEinkScreen = function() return true end,
             screen = { getWidth = function() return 1072 end, getHeight = function() return 1448 end,
                        getDPI = function() return 300 end } })
@@ -66,8 +66,12 @@ describe("Kindle browser in the manager", function()
             scheduleIn = function(_, s, fn) scheduled[#scheduled + 1] = { s = s, fn = fn } end,
             unschedule = function() end,
             show = function(_, w) shown[#shown + 1] = w end,
+            close = function(_, w) closed[#closed + 1] = w end,
+            nextTick = function(_, fn) fn() end,
+            forceRePaint = function() end,
         })
-        stub("ui/widget/notification", { new = function(_, o) return o end })
+        stub("ui/widget/notification", { new = function(_, o) o.kind = "notification" return o end })
+        stub("ui/widget/infomessage", { new = function(_, o) o.kind = "info" return o end })
         stub("renderers/android_bridge", { isAvailable = function() return false end })
         stub("mdict/kindletest", { problems = function() return {} end })
         fake_bridge = {
@@ -103,9 +107,15 @@ describe("Kindle browser in the manager", function()
 
     it("starts the browser with one page, the screen's pixel ratio and the shim", function()
         local r = assert(Manager.get({ settings = { kindle_browser = true } }))
+        -- the reader is told while it starts, and the message goes once the lookup is shown
+        assert.equal("info", shown[1].kind)
+        assert.truthy(shown[1].text:find("Starting the Kindle's browser", 1, true))
+        assert.equal(shown[1], closed[1])
         assert.equal("killOrphans", kb_calls[1])
         local opts = kb_calls[2]
-        assert.equal(300 / 160, opts.dpr)
+        -- a whole pixel ratio (screencast frames are in device pixels only then), zoomed to 300/160
+        assert.equal(2, opts.dpr)
+        assert.equal(300 / 160 / 2, r.bridge.zoom)
         assert.same({ w = 1072, h = 1448 }, opts.screen)
         assert.truthy(opts.shim:find("/kindle/kindle_shim%.so$"))
         assert.equal(1, r.max_slots)
@@ -135,6 +145,7 @@ describe("Kindle browser in the manager", function()
         package.loaded["mdict/kindletest"].problems = function() return { "Amazon's display server (X) is not running." } end
         assert.is_nil(Manager.get({ settings = { kindle_browser = true } }))
         assert.equal(1, #shown)
+        assert.equal("notification", shown[1].kind) -- (nothing was started)
         assert.truthy(shown[1].text:find("display server", 1, true))
         Manager.failed, Manager.notified = nil, false
         package.loaded["mdict/kindletest"].problems = function() return {} end
@@ -142,8 +153,8 @@ describe("Kindle browser in the manager", function()
         fake_bridge.dead = true
         assert.is_nil(Manager.get({ settings = { kindle_browser = true } }))
         assert.is_true(fake_bridge.freed)
-        assert.equal(2, #shown)
-        assert.truthy(shown[2].text:find("the browser ended", 1, true))
+        assert.equal(3, #shown)
+        assert.truthy(shown[3].text:find("the browser ended", 1, true))
     end)
 
     it("needs enough free memory", function()

@@ -6,8 +6,15 @@ from Lua alone.
 
 Each slot is a page target. The page's requests are intercepted and answered from the
 dictionary's files (Fetch domain, or the older Network interception when the browser was
-built without the network service, as Chromium 75 on Kindles is). Screenshots are decoded
-into the page memory the widget hands over.
+built without the network service, as Chromium 75 on Kindles is). Pages are decoded into the
+page memory the widget hands over.
+
+Pages come from the page's screencast when the bridge is given screencast parameters: a frame
+of what the browser has drawn arrives a fraction of a second after a change, where a
+screenshot makes the browser draw the page again (seconds on a Kindle). The viewport is a few
+pixels taller than the page, and the page colours that strip below it with a different grey
+for each capture, so a frame drawn before the change is told apart and skipped. When no frame
+comes, a screenshot is taken instead.
 ]]
 
 local json = require("mdict/json")
@@ -22,6 +29,9 @@ Bridge.SETUP_TIMEOUT = 30
 -- A screenshot that comes later is dropped: the renderer waits a little longer (capture_timeout),
 -- so the page memory it handed over is never written after it gave up.
 Bridge.CAPTURE_WAIT = 4
+Bridge.CAST_WAIT = 3 -- seconds to wait for the screencast frame of a capture before taking a screenshot
+Bridge.MARK_PX = 16 -- device pixels of the strip below the page that tells frames apart
+Bridge.MARK_STEP = 36 -- grey levels between the strip's colours (36, 72 ... 252)
 
 Bridge.TYPES = {
     css = "text/css", js = "text/javascript", png = "image/png", jpg = "image/jpeg", jpeg = "image/jpeg",
@@ -34,6 +44,15 @@ Bridge.TYPES = {
 -- is called; results go back through the __koDone binding as "<id>\n<json>".
 Bridge.KOBRIDGE = "window.KOBridge={_args:{},arg:function(id){var a=this._args[id];delete this._args[id];"
     .. "return a||'{}'},done:function(id,j){__koDone(id+'\\n'+j)},log:function(m){}};"
+
+-- The strip below the page (KOBridge.reserve CSS pixels, which the pager leaves out of its
+-- pages), in an element type that dictionaries' stylesheets do not style.
+Bridge.MARK_JS = "KOBridge.mark=function(v){var m=document.getElementById('ko-mark');if(!m){"
+    .. "m=document.createElement('ko-mark');m.id='ko-mark';document.documentElement.appendChild(m)}"
+    .. "var s=m.style,c='rgb('+v+','+v+','+v+')',p={position:'fixed',display:'block',left:'0',bottom:'0',"
+    .. "width:'100%',height:KOBridge.reserve+'px','z-index':'2147483647','pointer-events':'none',"
+    .. "background:c,margin:'0',padding:'0',border:'0',transform:'none',opacity:'1'};"
+    .. "for(var k in p)s.setProperty(k,p[k],'important')};"
 
 local function read_file(path)
     local f = io.open(path, "rb")
@@ -52,9 +71,13 @@ end
 --   dpr: device pixel ratio to lay pages out at (default 2)
 --   max_slots: page targets to use; above 1, new ones are created (default 1)
 --   capture: Page.captureScreenshot parameters (default PNG)
---   decode(data, ptr, w, h): draws an encoded screenshot into w*h RGBA at ptr; true or nil, err
+--   screencast: Page.startScreencast parameters, to take pages from the screencast (optional)
+--   decode(data, ptr, w, h, extra): draws an encoded image into w*h RGBA at ptr; the image has
+--     extra rows below the page (the strip), whose grey it returns: true, grey; or nil, err
 --   on_free(cdp): called once the browser is closed (default: nothing)
 --   capture_wait: seconds a screenshot may take (default CAPTURE_WAIT)
+--   cast_wait: seconds to wait for a screencast frame first (default CAST_WAIT)
+--   close_grace: seconds the browser gets to close before it is terminated (default 3)
 --   load_timeout, op_timeout: seconds the renderer waits for a document and an op (its defaults)
 --   log(...): debug messages (optional)
 -- Returns the bridge, or nil and an error.
@@ -68,6 +91,9 @@ function Bridge.new(opts)
         on_free = opts.on_free,
         log = opts.log or function() end,
         capture_wait = opts.capture_wait or Bridge.CAPTURE_WAIT,
+        screencast = opts.screencast,
+        cast_wait = opts.cast_wait or Bridge.CAST_WAIT,
+        close_grace = opts.close_grace or 3,
         slots = {},
         sessions = {}, -- sessionId -> slot
         outbox = {},
@@ -76,7 +102,10 @@ function Bridge.new(opts)
         next_rid = 0,
         spare = {}, -- page targets not yet taken by a slot
     }, Bridge)
-    self.capture_timeout = self.capture_wait + 2
+    -- the strip below the page, in CSS and device pixels
+    self.mark_css = self.screencast and math.ceil(Bridge.MARK_PX / self.dpr) or 0
+    self.mark_px = math.floor(self.mark_css * self.dpr + 0.5)
+    self.capture_timeout = self.capture_wait + 2 + (self.screencast and self.cast_wait or 0)
     self.load_timeout, self.op_timeout = opts.load_timeout, opts.op_timeout
     local targets, err = self.cdp:call("Target.getTargets", nil, nil, Bridge.SETUP_TIMEOUT)
     if not targets then
@@ -107,6 +136,19 @@ end
 function Bridge:_setup(slot_id)
     local target = table.remove(self.spare, 1)
     local err
+    if not target and self.max_slots < 2 then
+        -- the browser's own page can come a while after its DevTools answer
+        local used = {}
+        for _, s in pairs(self.slots) do used[s.target] = true end
+        local deadline = monotonic() + Bridge.SETUP_TIMEOUT
+        while not target and monotonic() < deadline do
+            local t = self.cdp:call("Target.getTargets", nil, nil, Bridge.SETUP_TIMEOUT)
+            for _, ti in ipairs(t and t.targetInfos or {}) do
+                if ti.type == "page" and not used[ti.targetId] then target = ti.targetId end
+            end
+            if not target and self.cdp:_pump(250) == nil then break end -- (nil: it ended)
+        end
+    end
     if not target then
         if self.max_slots < 2 then return nil, "no page" end
         local t
@@ -124,7 +166,8 @@ function Bridge:_setup(slot_id)
     for _, c in ipairs({
         { "Page.enable" }, { "Runtime.enable" },
         { "Runtime.addBinding", { name = "__koDone" } },
-        { "Page.addScriptToEvaluateOnNewDocument", { source = Bridge.KOBRIDGE } },
+        { "Page.addScriptToEvaluateOnNewDocument", { source = Bridge.KOBRIDGE .. (self.mark_css > 0
+            and string.format("KOBridge.reserve=%d;", self.mark_css) .. Bridge.MARK_JS or "") } },
     }) do
         local ok, e = self.cdp:call(c[1], c[2], sid, Bridge.SETUP_TIMEOUT)
         if not ok then return nil, e end
@@ -162,7 +205,8 @@ function Bridge:open(slot_id, w, h)
     end
     local dpr = self.dpr
     self:_cmd("Emulation.setDeviceMetricsOverride", {
-        width = math.floor(w / dpr + 0.5), height = math.floor(h / dpr + 0.5), deviceScaleFactor = dpr, mobile = false,
+        width = math.floor(w / dpr + 0.5), height = math.floor(h / dpr + 0.5) + self.mark_css,
+        deviceScaleFactor = dpr, mobile = false,
     }, slot.session, function(_, err)
         if err then self:_emit({ ev = "error", slot = slot_id, msg = "open: " .. tostring(err) }) return end
         self:_emit({ ev = "opened", slot = slot_id })
@@ -293,6 +337,35 @@ function Bridge:capture(slot_id, id, ptr, w, h)
         self:_emit({ ev = "captured", slot = slot_id, id = id, ok = false })
         return
     end
+    local cap = { id = id, ptr = ptr, w = w, h = h, t0 = monotonic(), frames = 0 }
+    if not self.screencast then return self:_screenshot(slot, cap) end
+    if slot.cap then self:_endCast(slot, false) end
+    -- a grey the strip did not have for the last captures
+    slot.mark = (slot.mark or 0) % math.floor(255 / Bridge.MARK_STEP) + 1
+    cap.level = slot.mark * Bridge.MARK_STEP
+    cap.deadline = cap.t0 + self.cast_wait
+    slot.cap = cap
+    self:_cmd("Runtime.evaluate", { expression = "KOBridge.mark(" .. cap.level .. ")" }, slot.session, function(r, err)
+        if not err and r and r.exceptionDetails then err = "the page has no strip" end
+        if err and slot.cap == cap then
+            self.log("screencast capture failed:", tostring(err))
+            self:_endCast(slot, true)
+        end
+    end)
+    if not slot.casting then
+        slot.casting = true
+        self:_cmd("Page.startScreencast", self.screencast, slot.session, function(_, err)
+            if not err then return end
+            self.log("no screencast:", tostring(err))
+            self.screencast = nil -- screenshots from now on (the strip stays)
+            slot.casting = false
+            if slot.cap then self:_endCast(slot, true) end
+        end)
+    end
+end
+
+-- A screenshot of the slot's page (cap: the capture). One that comes too late is dropped.
+function Bridge:_screenshot(slot, cap)
     local t0 = monotonic()
     self:_cmd("Page.captureScreenshot", self.capture_params, slot.session, function(r, err)
         local t1 = monotonic()
@@ -302,15 +375,54 @@ function Bridge:capture(slot_id, id, ptr, w, h)
         end
         if r and r.data then
             local data = base64.decode(r.data)
-            local dok, res, derr = pcall(self.decode, data, ptr, w, h)
+            local dok, res, derr = pcall(self.decode, data, cap.ptr, cap.w, cap.h, self.mark_px)
             ok = dok and res == true
             if not ok then err = dok and derr or res end
         end
         if err then self.log("capture failed:", tostring(err)) end
-        self:_emit({ ev = "captured", slot = slot_id, id = id, ok = ok,
-            wait = math.floor((t1 - t0) * 1000 + 0.5), draw = math.floor((monotonic() - t1) * 1000 + 0.5),
+        self:_emit({ ev = "captured", slot = slot.id, id = cap.id, ok = ok,
+            wait = math.floor((t1 - cap.t0) * 1000 + 0.5), draw = math.floor((monotonic() - t1) * 1000 + 0.5),
             via = "screenshot" })
     end)
+end
+
+-- Ends the slot's screencast capture: with a screenshot instead (fallback), or not at all.
+function Bridge:_endCast(slot, fallback)
+    local cap = slot.cap
+    slot.cap = nil
+    if slot.casting then
+        slot.casting = false
+        self:_cmd("Page.stopScreencast", nil, slot.session)
+    end
+    if not cap then return end
+    if fallback then
+        self:_screenshot(slot, cap)
+    else
+        self:_emit({ ev = "captured", slot = slot.id, id = cap.id, ok = false })
+    end
+end
+
+-- A screencast frame: the capture's page once the strip has the capture's grey.
+function Bridge:_frame(slot, p)
+    self:_cmd("Page.screencastFrameAck", { sessionId = p.sessionId }, slot.session)
+    local cap = slot.cap
+    if not (cap and p.data) then return end
+    cap.frames = cap.frames + 1
+    local t1 = monotonic()
+    local dok, res, grey = pcall(self.decode, base64.decode(p.data), cap.ptr, cap.w, cap.h, self.mark_px)
+    if not (dok and res == true) then
+        -- (a recent desktop Chromium sends frames in CSS pixels, smaller than the page)
+        self.log("cannot use screencast frames, taking screenshots:", tostring(dok and grey or res))
+        self.screencast = nil
+        return self:_endCast(slot, true)
+    end
+    if type(grey) ~= "number" or math.abs(grey - cap.level) > Bridge.MARK_STEP / 2 - 4 then return end
+    slot.cap = nil
+    slot.casting = false
+    self:_cmd("Page.stopScreencast", nil, slot.session)
+    self:_emit({ ev = "captured", slot = slot.id, id = cap.id, ok = true,
+        wait = math.floor((t1 - cap.t0) * 1000 + 0.5), draw = math.floor((monotonic() - t1) * 1000 + 0.5),
+        via = "screencast", frames = cap.frames })
 end
 
 -- Handles one message from the browser.
@@ -341,6 +453,8 @@ function Bridge:_handle(m)
     elseif method == "Network.requestIntercepted" and slot then
         self:_request(slot, { id = p.interceptionId, url = p.request and p.request.url or "",
             navigation = p.isNavigationRequest and p.resourceType == "Document" and p.frameId == slot.target })
+    elseif method == "Page.screencastFrame" and slot then
+        self:_frame(slot, p)
     elseif method == "Page.loadEventFired" and slot then
         if slot.loading then
             slot.loading = false
@@ -372,6 +486,14 @@ function Bridge:_pump(timeout_ms)
         self:_emit({ ev = "error", slot = 0, msg = "the browser ended (" .. tostring(cdp:exitStatus()) .. ")",
             fatal = true })
     end
+    for _, slot in pairs(self.slots) do
+        local cap = slot.cap
+        if cap and monotonic() >= cap.deadline then
+            self.log(string.format("no screencast frame after %.1f s (%d other frames): taking a screenshot",
+                monotonic() - cap.t0, cap.frames))
+            self:_endCast(slot, true)
+        end
+    end
     if next(self.needs) then
         local now = monotonic()
         for rid, n in pairs(self.needs) do
@@ -401,6 +523,7 @@ function Bridge:close(slot_id)
     if not slot then return end
     -- the page stays (Kindles cannot create another): only its document goes
     slot.doc, slot.files, slot.loading = "", {}, false
+    if slot.cap or slot.casting then self:_endCast(slot, false) end
     for rid, n in pairs(self.needs) do
         if n.slot == slot then
             self.needs[rid] = nil
@@ -420,7 +543,7 @@ function Bridge:alive() return not self.closed and not self.cdp:exitStatus() end
 function Bridge:free()
     if self.freed then return end
     self.freed = true
-    local how, status = self.cdp:close(3)
+    local how, status = self.cdp:close(self.close_grace)
     self.log("browser closed:", how, status)
     if self.on_free then pcall(self.on_free, self.cdp) end
 end

@@ -56,7 +56,8 @@
 
   function measureViewport() {
     state.W = window.innerWidth;
-    state.H = window.innerHeight;
+    // a bridge can keep a strip below the pages for itself (KOBridge.reserve CSS pixels)
+    state.H = window.innerHeight - ((window.KOBridge && KOBridge.reserve) | 0);
     state.dpr = window.devicePixelRatio || 1;
     var root = document.documentElement;
     root.style.setProperty("--mdict-page-w", state.W + "px");

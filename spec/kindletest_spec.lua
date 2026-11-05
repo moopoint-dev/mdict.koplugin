@@ -206,7 +206,8 @@ describe("Kindle browser test", function()
             assert.equal("\137PNG", f:read(4))
             f:close()
         end
-        assert.equal("closed", r.closed)
+        -- terminated right away: the Kindle's browser ignores Browser.close
+        assert.equal("terminated", r.closed)
         assert.is_nil(io.open(work .. "/w/page.html", "rb")) -- cleaned up
     end)
 

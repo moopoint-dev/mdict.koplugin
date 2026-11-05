@@ -129,12 +129,6 @@ function MDict:onNetworkConnected()
     UIManager:scheduleIn(5, function() Updater.autoCheck("network") end)
 end
 
--- The Kindle's browser is not left running while the Kindle sleeps.
-function MDict:onSuspend()
-    local Manager = require("renderers/manager")
-    if Manager.renderer and Manager.renderer.bridge.kindle then Manager.shutdown() end
-end
-
 function MDict:onResume()
     UIManager:scheduleIn(30, function() Updater.autoCheck("resume") end)
 end
@@ -402,10 +396,11 @@ function MDict:displayItems()
             text = _("Render entries with the Kindle's browser (experimental)"),
             help_text = _("Lays entries out with the web browser of the Kindle's firmware (5.16 to 5.18), so they "
                 .. "look as their dictionary intends, with vertical text and the dictionary's scripts. The first "
-                .. "lookup starts the browser in the background, which takes a few seconds; it closes again after "
-                .. "ten minutes without a lookup, and when the Kindle sleeps. It needs about 100 MB of memory. "
-                .. "When off, or if the browser fails, KOReader's built-in HTML renderer is used. If the Kindle "
-                .. "behaves oddly, turn this off and restart the Kindle."),
+                .. "lookup starts the browser, which takes about 20 seconds on a Paperwhite; it then stays open, "
+                .. "also while the Kindle sleeps, and closes after twenty minutes without a lookup. It uses about "
+                .. "70 MB of memory, and starts only when 80 MB are free. When off, or if the browser fails, "
+                .. "KOReader's built-in HTML renderer is used. If the Kindle behaves oddly, turn this off and "
+                .. "restart the Kindle."),
             checked_func = function() return s.kindle_browser == true end,
             callback = function()
                 s.kindle_browser = not s.kindle_browser or nil

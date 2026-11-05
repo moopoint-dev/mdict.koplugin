@@ -112,6 +112,67 @@ describe("DevTools bridge", function()
         assert.is_true(cdp.closed)
     end)
 
+    it("takes pages from the screencast, telling frames apart by the strip below the page", function()
+        local b64 = require("mdict/base64").encode
+        local cdp = fake_cdp({
+            ["Target.getTargets"] = function() return { targetInfos = { { type = "page", targetId = "T1" } } } end,
+            ["Target.attachToTarget"] = function() return { sessionId = "S1" } end,
+            ["Page.enable"] = function() return {} end,
+            ["Runtime.enable"] = function() return {} end,
+            ["Runtime.addBinding"] = function() return {} end,
+            ["Page.addScriptToEvaluateOnNewDocument"] = function() return {} end,
+            ["Network.enable"] = function() return {} end,
+            ["Network.setRequestInterception"] = function() return {} end,
+            ["Emulation.setDeviceMetricsOverride"] = function() return {} end,
+            ["Page.captureScreenshot"] = function() return { data = b64("grey:0") } end,
+        })
+        local decoded = {}
+        local b = assert(Bridge.new({ cdp = cdp, dpr = 2, screencast = { format = "jpeg", quality = 92 },
+            cast_wait = 0.2, capture_wait = 1,
+            decode = function(data, _, w, h, extra)
+                decoded[#decoded + 1] = { data = data, w = w, h = h, extra = extra }
+                return true, tonumber(data:match("^grey:(%d+)$"))
+            end }))
+        b:open(1, 1000, 1100)
+        assert.equal('{"ev":"opened","slot":1}', b:poll(0))
+        local sent = {}
+        for _, m in ipairs(cdp.sent) do sent[m.method] = m.params end
+        -- 8 CSS pixels (16 device pixels) below the page, which the pager leaves out
+        assert.same({ width = 500, height = 558, deviceScaleFactor = 2, mobile = false },
+            sent["Emulation.setDeviceMetricsOverride"])
+        assert.truthy(sent["Page.addScriptToEvaluateOnNewDocument"].source:find("KOBridge.reserve=8;", 1, true))
+        assert.equal(1 + 2 + 0.2, b.capture_timeout)
+        local function frame(data)
+            cdp.messages[#cdp.messages + 1] = { method = "Page.screencastFrame", sessionId = "S1",
+                params = { data = b64(data), sessionId = #cdp.sent, metadata = {} } }
+            return b:poll(0)
+        end
+        local function last(method)
+            for i = #cdp.sent, 1, -1 do if cdp.sent[i].method == method then return cdp.sent[i] end end
+        end
+        b:capture(1, 5, nil, 1000, 1100)
+        assert.equal("KOBridge.mark(36)", last("Runtime.evaluate").params.expression)
+        assert.same({ format = "jpeg", quality = 92 }, last("Page.startScreencast").params)
+        -- a frame drawn before the strip changed is skipped (and acknowledged)
+        assert.is_nil(frame("grey:252"))
+        assert.equal("Page.screencastFrameAck", cdp.sent[#cdp.sent].method)
+        local ev = json.decode(frame("grey:38"))
+        assert.same({ "captured", 5, true, "screencast", 2 }, { ev.ev, ev.id, ev.ok, ev.via, ev.frames })
+        assert.same({ w = 1000, h = 1100, extra = 16 }, { w = decoded[2].w, h = decoded[2].h, extra = decoded[2].extra })
+        assert.truthy(last("Page.stopScreencast"))
+        assert.is_nil(frame("grey:38")) -- late frames go nowhere
+        -- the next capture wants the next grey; without a frame, a screenshot is taken
+        b:capture(1, 6, nil, 1000, 1100)
+        assert.equal("KOBridge.mark(72)", last("Runtime.evaluate").params.expression)
+        assert.is_nil(b:poll(0))
+        assert.is_nil(last("Page.captureScreenshot"))
+        os.execute("sleep 0.3")
+        assert.is_nil(b:poll(0)) -- asks for the screenshot
+        ev = json.decode(b:poll(0))
+        assert.same({ "captured", 6, true, "screenshot" }, { ev.ev, ev.id, ev.ok, ev.via })
+        b:free()
+    end)
+
     it("decodes PNG screenshots", function()
         -- 2x2 RGBA, each row with filter 1 (each byte adds the one a pixel to its left)
         local rgba = "\1" .. "\255\0\0\255" .. "\0\255\0\255" .. "\1" .. "\0\0\255\255" .. "\255\255\255\128"
@@ -136,6 +197,21 @@ describe("DevTools bridge", function()
             { wide[0], wide[1], wide[2], wide[3], wide[4], wide[5], wide[6], wide[7], wide[8], wide[9], wide[10], wide[11] })
         local _, err = Png.decodeInto(png, buf, 6, 2)
         assert.equal("PNG is 2x2, not 6x2", err)
+        -- a strip below the page: left out of it, its grey returned
+        local grey = "\0" .. "\10\20" .. "\0" .. "\30\40" .. "\0" .. "\100\102"
+        write(tmp, grey)
+        f = io.popen("python3 -c \"import sys,zlib,struct;d=open(sys.argv[1],'rb').read();"
+            .. "c=lambda t,b:struct.pack('>I',len(b))+t+b+struct.pack('>I',zlib.crc32(t+b));"
+            .. "sys.stdout.buffer.write(b'\\x89PNG\\r\\n\\x1a\\n'+c(b'IHDR',struct.pack('>IIBBBBB',2,3,8,0,0,0,0))"
+            .. "+c(b'IDAT',zlib.compress(d))+c(b'IEND',b''))\" " .. tmp)
+        png = f:read("*a")
+        f:close()
+        local ok, level = Png.decodeInto(png, buf, 2, 2, 1)
+        assert.is_true(ok)
+        assert.equal(101, level)
+        assert.same({ 10, 10, 10, 255, 20, 30, 40, 255 }, { buf[0], buf[1], buf[2], buf[3], buf[4], buf[8], buf[12], buf[15] })
+        _, err = Png.decodeInto(png, buf, 2, 2, 5)
+        assert.equal("PNG is 2x3, not 2x7", err)
     end)
 
     local chromium = os.getenv("MDICT_CHROMIUM")
@@ -179,6 +255,57 @@ describe("DevTools bridge", function()
         wr:close()
         bridge:free()
         assert.truthy(cdp:exitStatus())
+    end)
+
+    real("takes pages from a real browser's screencast", function()
+        local work = helper.tmpdir("cdp-cast")
+        os.execute("mkdir -p '" .. work .. "/profile'")
+        local cdp = assert(Cdp.spawn({ exe = chromium,
+            args = { "--headless=new", "--no-sandbox", "--remote-debugging-pipe", "--hide-scrollbars",
+                     "--user-data-dir=" .. work .. "/profile", "about:blank" },
+            env = { "HOME=" .. work .. "/profile", "PATH=/usr/bin:/bin" } }))
+        local bridge = assert(Bridge.new({ cdp = cdp, dpr = 1, decode = Png.decodeInto,
+            screencast = { format = "png" } }))
+        local wr = WebRenderer.new({ bridge = bridge })
+        local slot = assert(wr:document({ dict_id = "d1", cache_root = work, stylesheets = {} }, 600, 400))
+        local r = assert(wr:setEntry(slot, { html = '<p style="font-size:30px">' .. string.rep("Word ", 150)
+            .. "</p><p>End</p>", writing = "horizontal" }))
+        assert.truthy(r.pages > 1)
+        local function draw(n)
+            local buf = ffi.new("uint8_t[?]", 600 * 400 * 4)
+            local ok, err, timing = wr:renderPage(slot, n, buf)
+            assert.is_true(ok, err)
+            assert.equal("screencast", timing.via)
+            local dark, where = 0, 0
+            for i = 0, 600 * 400 - 1 do
+                if buf[i * 4] < 100 then dark, where = dark + 1, (where + i) % 1000003 end
+            end
+            return dark, dark .. ":" .. where
+        end
+        local dark, first = draw(0)
+        local _, last = draw(r.pages - 1)
+        assert.truthy(dark > 1000, "page 1 has text")
+        assert.are_not.equal(first, last) -- the last page, not page 1 again
+        assert.equal(first, select(2, draw(0)))
+        wr:close()
+        bridge:free()
+        -- frames that are not the page's size (this Chromium's are in CSS pixels): screenshots
+        os.execute("mkdir -p '" .. work .. "/profile2'")
+        cdp = assert(Cdp.spawn({ exe = chromium,
+            args = { "--headless=new", "--no-sandbox", "--remote-debugging-pipe", "--hide-scrollbars",
+                     "--user-data-dir=" .. work .. "/profile2", "about:blank" },
+            env = { "HOME=" .. work .. "/profile2", "PATH=/usr/bin:/bin" } }))
+        bridge = assert(Bridge.new({ cdp = cdp, dpr = 1.5, decode = Png.decodeInto,
+            screencast = { format = "png" } }))
+        wr = WebRenderer.new({ bridge = bridge })
+        slot = assert(wr:document({ dict_id = "d1", cache_root = work, stylesheets = {} }, 600, 401))
+        assert(wr:setEntry(slot, { html = "<p>Word</p>", writing = "horizontal" }))
+        local ok, err, timing = wr:renderPage(slot, 0, ffi.new("uint8_t[?]", 600 * 401 * 4))
+        assert.is_true(ok, err)
+        assert.equal("screenshot", timing.via)
+        assert.is_nil(bridge.screencast)
+        wr:close()
+        bridge:free()
     end)
 
     real("reports a browser that ended", function()

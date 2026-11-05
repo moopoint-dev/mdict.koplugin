@@ -17,12 +17,18 @@ pcall(ffi.cdef, "int chmod(const char *path, unsigned int mode);")
 
 local KB = {}
 
+-- A Paperwhite 4 (5.18.1.1.1, one core at 1 GHz) took 14 s to start the browser, 5 s more to
+-- load the first page, and 3.5 to 6 s for each PNG screenshot of a 1000x1100 page.
 KB.START_TIMEOUT = 90
--- screenshots as JPEG: Chromium encodes them in about half the time PNG takes
-KB.CAPTURE = { format = "jpeg", quality = 92 }
-KB.IDLE_CLOSE = 600 -- seconds without a lookup before the renderer's browser is closed
+-- pages as JPEG: Chromium encodes them in about half the time PNG takes
+KB.CAPTURE = { format = "jpeg", quality = 92 } -- screenshots, when no screencast frame comes
+KB.SCREENCAST = { format = "jpeg", quality = 92 }
+KB.IDLE_CLOSE = 1200 -- seconds awake without a lookup before the renderer's browser is closed
 KB.MIN_MEMORY = 80 * 1024 * 1024 -- available memory the renderer needs to start the browser
-KB.CAPTURE_WAIT, KB.LOAD_TIMEOUT, KB.OP_TIMEOUT = 10, 30, 30 -- seconds
+KB.CAST_WAIT, KB.CAPTURE_WAIT = 5, 15 -- seconds for a screencast frame, then for a screenshot
+KB.LOAD_TIMEOUT, KB.OP_TIMEOUT = 60, 45 -- seconds
+-- it ignores Browser.close (the test waited 5 s for nothing): it is terminated right away
+KB.CLOSE_GRACE = 0
 
 local function read(path)
     local f = io.open(path, "rb")
@@ -138,28 +144,38 @@ end
 --- Closes the browser and cleans up. Returns how it ended, its exit status and its log.
 function KB.stop(browser, cfg)
     local pid = browser.pid
-    local how, status = browser:close(5)
+    local how, status = browser:close(KB.CLOSE_GRACE)
     return how, status, KB.cleanup(cfg, pid)
 end
 
--- Draws a screenshot (JPEG or PNG) into w*h RGBA with KOReader's image decoders. It can be
+-- Draws a page image (JPEG or PNG) into w*h RGBA with KOReader's image decoders. It can be
 -- a pixel or two off the page size (a CSS size times a fractional pixel ratio): the page
--- then gets what overlaps, and white for the rest.
-function KB.decode(data, ptr, w, h)
+-- then gets what overlaps, and white for the rest. extra: rows below the page (the bridge's
+-- strip, of one grey), whose grey is returned after true.
+function KB.decode(data, ptr, w, h, extra)
+    extra = extra or 0
     local mupdf = require("ffi/mupdf")
     local Blitbuffer = require("ffi/blitbuffer")
     local img = mupdf.renderImage(data, #data)
     if not img then return nil, "cannot decode the page" end
     local iw, ih = img:getWidth(), img:getHeight()
-    if math.abs(iw - w) > 2 or math.abs(ih - h) > 2 then
+    if math.abs(iw - w) > 2 or math.abs(ih - h - extra) > 2 then
         img:free()
-        return nil, string.format("the page is %dx%d, not %dx%d", iw, ih, w, h)
+        return nil, string.format("the page is %dx%d, not %dx%d", iw, ih, w, h + extra)
+    end
+    local grey
+    if extra > 0 then
+        local y, sum, n = ih - 1 - math.floor(extra / 4), 0, 0
+        for x = math.floor(iw / 4), math.floor(iw * 3 / 4), 4 do
+            sum, n = sum + img:getPixel(x, y):getColor8().a, n + 1
+        end
+        grey = sum / n
     end
     local dst = Blitbuffer.new(w, h, Blitbuffer.TYPE_BBRGB32, ptr)
     if iw < w or ih < h then dst:fill(Blitbuffer.COLOR_WHITE) end
     dst:blitFrom(img, 0, 0, 0, 0, math.min(w, iw), math.min(h, ih))
     img:free()
-    return true
+    return true, grey
 end
 
 --- Starts the browser as a renderer bridge. opts: shim, screen ({ w, h }), dpr, log(...),
@@ -185,10 +201,13 @@ function KB.bridge(opts)
         dpr = opts.dpr,
         max_slots = 1, -- a new page crashes this browser
         capture = KB.CAPTURE,
+        screencast = KB.SCREENCAST,
         decode = opts.decode or KB.decode,
         log = opts.log,
         -- a single core at 1 GHz: a large dictionary's first entry can take seconds
-        capture_wait = KB.CAPTURE_WAIT, load_timeout = KB.LOAD_TIMEOUT, op_timeout = KB.OP_TIMEOUT,
+        cast_wait = KB.CAST_WAIT, capture_wait = KB.CAPTURE_WAIT,
+        load_timeout = KB.LOAD_TIMEOUT, op_timeout = KB.OP_TIMEOUT,
+        close_grace = KB.CLOSE_GRACE,
         on_free = function() KB.cleanup(cfg, pid) end,
     })
     if not bridge then
