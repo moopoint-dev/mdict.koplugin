@@ -605,7 +605,28 @@
     return -1;
   }
 
+  function pageOfRange(range) {
+    var rr = range ? rectsOf(range) : [];
+    for (var i = 0; i < rr.length; i++) {
+      if (rr[i].width > 0 || rr[i].height > 0) return pageOfRect(rr[i]);
+    }
+    return -1;
+  }
+
   // Taps ---------------------------------------------------------------------
+
+  // The character under a point on page `page`, as a range: the one after the caret
+  // there, or the one before it (at the end of a line).
+  function charAt(x, y, page) {
+    var r = caretAt(x, y), node = r && r.startContainer;
+    if (!node || node.nodeType !== 3) return null;
+    for (var off = Math.min(r.startOffset, node.data.length - 1); off >= 0 && off >= r.startOffset - 1; off--) {
+      r.setStart(node, off);
+      r.setEnd(node, off + 1);
+      if (pageOfRange(r) === page) return r;
+    }
+    return null;
+  }
 
   function isRealLink(a) {
     var href = (a.getAttribute("href") || "").trim();
@@ -835,8 +856,8 @@
   };
 
   // A tap that is not on a link: activates expandable sections and the like.
-  // When the entry changes it is laid out again, staying on the tapped
-  // element's page. Taps that change nothing are left to KOReader.
+  // When the entry changes it is laid out again, staying on the page of what
+  // was under the finger. Taps that change nothing are left to KOReader.
   // With link: a tap on a link, offered to the entry's scripts first. It is
   // handled only when a script takes the click over (a picture link that opens
   // a viewer); otherwise KOReader follows the link.
@@ -875,6 +896,10 @@
     // sections opened on the entry itself are opened again after a re-layout; viewers are not
     var path = a.link || inOverlay ? null : pathOf(target);
     var shownPage = state.page;
+    // after a re-layout, the page shown is that of the character tapped: the target can
+    // start pages earlier (a definition that shows or hides its translation)
+    var spot = charAt(x, y, shownPage);
+    if (spot && !target.contains(spot.startContainer)) spot = null;
     (async function () {
       var t = timer(), added = [];
       var w = watch(added);
@@ -899,7 +924,8 @@
         return done(opId, { handled: true, pages: state.pages, page: state.page, mode: state.mode, ms: t.done() });
       }
       await settleLayout({ imageTimeout: 1000 }, t);
-      var p = target.isConnected ? pageOfElement(target) : -1;
+      var p = pageOfRange(spot);
+      if (p < 0 && target.isConnected) p = pageOfElement(target);
       state.page = Math.max(0, Math.min(state.pages - 1, p >= 0 ? p : shownPage));
       present();
       t.mark("page");

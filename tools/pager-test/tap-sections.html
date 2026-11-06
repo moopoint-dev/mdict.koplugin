@@ -1,16 +1,20 @@
 <!-- Pager test entry: sections a tap opens, several pages into the entry.
   node tools/pager-test/run.js --res tools/pager-test --out <dir> --zoom 1.25 \
     --tap-selector '#note .head' tools/pager-test/tap-sections.html
-  (or --tap-selector 'label[for=more]'; add --cdp to test an older Chromium)
-  Expected: tap.handled, tap.page = tapPage (the pager stays on the tapped page),
-  tap.pages and replayPages one page or more above pages. -->
+  (or --tap-selector 'label[for=more]' or '#long .mark'; add --cdp to test an older Chromium)
+  Expected: tap.handled, and tap.page = tapPage (the pager stays on the page tapped).
+  The sections add a page or more to tap.pages and replayPages. -->
 <style>
 .head { cursor: pointer; font-weight: bold; }
+.hidden { display: none; }
 #note.closed .body { display: none; }
 #more { display: none; }
 #more:not(:checked) ~ .body { display: none; }
 </style>
 <div class="entry">
+<p id="long" onclick="this.nextElementSibling.classList.toggle('hidden')">Sentence 1 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 2 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 3 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 4 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 5 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 6 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 7 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 8 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 9 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 10 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 11 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 12 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 13 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 14 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 15 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 16 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 17 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 18 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 19 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 20 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 21 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 22 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 23 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 24 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 25 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 26 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 27 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 28 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 29 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 30 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 31 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 32 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 33 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 34 of a long paragraph that a tap anywhere in it shows or hides the line after. Sentence 35 of a long paragraph that a tap anywhere in it shows or hides the line after.
+Sentence 36, the last one, with a <span class="mark">word</span> to tap at its end.</p>
+<p>The line after the long paragraph.</p>
 <p>Line 1: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
 <p>Line 2: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
 <p>Line 3: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
