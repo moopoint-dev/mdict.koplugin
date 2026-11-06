@@ -343,13 +343,13 @@ function Integration.installWidgetHooks()
             local widget = Integration.state.widget(dql, r)
             if widget then
                 -- it is a ScrollHtmlWidget, so find and text selection reach it the usual way
-                dql.mdict_widget = widget
+                dql.mdict_widget, dql.mdict_widget_result = widget, r
                 dql.shw_widget, dql.stw_widget = widget, nil
                 dql.text_widget = widget
                 return
             end
         end
-        dql.mdict_widget = nil
+        dql.mdict_widget, dql.mdict_widget_result = nil, nil
         -- an MDict result that MuPDF shows after all (the WebView could not)
         r = dql.results and dql.results[dql.dict_index]
         local d = r and r.mdict and not r.mdict_static and Integration.state.library:byId(r.mdict.id)
@@ -363,8 +363,14 @@ function Integration.installWidgetHooks()
     DictQuickLookup.update = function(dql)
         local r = web_result(dql)
         if r or dql.mdict_widget then
-            -- switching to, from or between MDict entries: always build a fresh widget
-            if dql.text_widget and dql.text_widget.free then dql.text_widget:free() end
+            -- switching to, from or between MDict entries: always build a fresh widget (or
+            -- take one laid out ahead); one the reader leaves may be kept for their return
+            local old = dql.text_widget
+            local keep = Integration.state.keep
+            if old and old == dql.mdict_widget and keep and keep(dql, old, dql.mdict_widget_result) then
+                old = nil
+            end
+            if old and old.free then old:free() end
             dql.text_widget = nil
             dql.shw_widget, dql.stw_widget = nil, nil
         end

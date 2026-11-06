@@ -101,6 +101,7 @@ function MDict:init()
     state.widget = function(dql, r) return Manager.widget(state, dql, r) end
     state.prefetch = function(dql) return Manager.prefetch(state, dql) end
     state.dropPrefetch = function(dql) return Manager.dropPrefetch(dql) end
+    state.keep = function(dql, w, r) return Manager.keep(state, dql, w, r) end
     state.playSound = function(dictionary, path)
         local ok, msg = Manager.playSound(state, dictionary, path)
         if not ok and msg then

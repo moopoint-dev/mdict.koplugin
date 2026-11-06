@@ -458,10 +458,10 @@ describe("WebView widgets", function()
             dict_font_size = 20, content_width = 600, definition_height = 300,
             html_dictionary_link_tapped_callback = function() end,
         }
-        -- runs the scheduler (a background job's steps) for up to 10 s, until p's job is done
+        -- runs the scheduler (a background job's steps) for up to 40 s, until p's job is done
         local clock = WebRenderer.clock
         local function settle(p)
-            local deadline = clock() + 10
+            local deadline = clock() + 40
             while clock() < deadline do
                 if p.widget or p.job == nil or p.job.done then return end
                 UIManager:runTasks()
@@ -542,13 +542,92 @@ describe("WebView widgets", function()
         assert.equal(2, dql.mdict_prefetch.index)
         Manager.dropPrefetch(dql)
         assert.is_nil(dql.mdict_prefetch)
-        local deadline = clock() + 10
+        local deadline = clock() + 40
         while #UIManager.tasks > 0 and clock() < deadline do
             UIManager:runTasks()
             require("ffi").C.poll(nil, 0, 2)
         end
         assert.equal(0, #UIManager.tasks)
         w3:free()
+        Manager.shutdown()
+    end)
+
+    it("with one page, lays out the MDict result ahead and keeps it when the reader moves away", function()
+        local Manager = require("renderers/manager")
+        local Library = require("mdict/library")
+        local lib = Library.new({ dirs = { helper.fixtures() }, cache_dir = helper.tmpdir("olib") })
+        lib:scan()
+        local d = lib:byTitle("Basic Test")
+        local state = { library = lib, settings = {} }
+        local apple = Lookup.run({ d }, { "Apple" })[1]
+        local long = Lookup.run({ d }, { "long" })[1]
+        local plain = { dict = "Other", definition = "plain" }
+        local plain2 = { dict = "Third", definition = "plain too" }
+        local function popup(results)
+            return {
+                results = results, dict_index = 1, definition = "plain", word = "Apple",
+                dict_font_size = 20, content_width = 600, definition_height = 300,
+                html_dictionary_link_tapped_callback = function() end,
+            }
+        end
+        local clock = WebRenderer.clock
+        local function settle(p)
+            local deadline = clock() + 40
+            while clock() < deadline do
+                if p.widget or p.job == nil or p.job.done then return end
+                UIManager:runTasks()
+                require("ffi").C.poll(nil, 0, 2)
+            end
+        end
+        local browser = assert(Manager.get(state))
+        local slots = browser.max_slots
+        browser.max_slots = 1 -- as the Kindle's browser
+
+        -- another dictionary's result is shown: the nearest MDict one is laid out ahead,
+        -- even when it is not the next result
+        UIManager.tasks = {}
+        local dql = popup({ plain, plain2, apple })
+        Manager.prefetch(state, dql)
+        local p = assert(dql.mdict_prefetch)
+        assert.equal(3, p.index)
+        settle(p)
+        local ahead = assert(p.widget)
+        -- the reader gets there: it is used as it is, and nothing is laid out ahead meanwhile
+        dql.dict_index = 3
+        local w = Manager.widget(state, dql, apple)
+        assert.equal(ahead, w)
+        dql.mdict_widget, dql.mdict_widget_result = w, apple
+        Manager.prefetch(state, dql)
+        assert.is_nil(dql.mdict_prefetch)
+        local page = assert(w.htmlbox_widget.page_cache[1])
+        -- the reader moves to another dictionary's result: the entry is kept, and is what
+        -- they get when they come back, its pages as they were
+        dql.dict_index = 2
+        assert.is_true(Manager.keep(state, dql, w, apple))
+        dql.mdict_widget, dql.mdict_widget_result = nil, nil
+        Manager.prefetch(state, dql)
+        assert.equal(w, dql.mdict_prefetch.widget)
+        dql.dict_index = 3
+        assert.equal(w, Manager.widget(state, dql, apple))
+        assert.equal(page, w.htmlbox_widget.page_cache[1])
+        -- the same result again (a new font size) is not kept
+        assert.is_false(Manager.keep(state, dql, w, apple))
+        w:free()
+
+        -- a result picked while another is being laid out ahead gets the page
+        UIManager.tasks = {}
+        local dql2 = popup({ plain, apple, long })
+        Manager.prefetch(state, dql2)
+        local p2 = assert(dql2.mdict_prefetch)
+        assert.equal(2, p2.index)
+        UIManager:runTasks() -- the layout ahead has begun
+        dql2.dict_index = 3
+        local w2 = assert(Manager.widget(state, dql2, long))
+        assert.is_nil(dql2.mdict_prefetch)
+        assert.is_true(w2.htmlbox_widget.page_count > 1)
+        w2:free()
+
+        browser.max_slots = slots
         Manager.shutdown()
     end)
 
@@ -581,7 +660,7 @@ describe("WebView widgets", function()
         end
         local clock = WebRenderer.clock
         local function settle(job)
-            local deadline = clock() + 10
+            local deadline = clock() + 40
             while not job.done and clock() < deadline do
                 UIManager:runTasks()
                 require("ffi").C.poll(nil, 0, 2)

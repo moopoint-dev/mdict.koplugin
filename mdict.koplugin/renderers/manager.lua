@@ -309,6 +309,14 @@ function Manager.widget(state, dql, r, opts)
     if not opts then
         local ready = Manager.takePrefetched(dql, r)
         if ready then return ready end
+        -- with one page (the Kindle's browser), another result being laid out ahead holds it
+        local p = dql and dql.mdict_prefetch
+        if p and p.job and not p.job.done and Manager.renderer and Manager.renderer.max_slots < 2 then
+            local job = p.job
+            Manager.dropPrefetch(dql)
+            -- (it lets the page go once what it asked the browser for is done)
+            Manager.renderer:finishJob(job)
+        end
     end
     opts = opts or {}
     local renderer = Manager.get(state)
@@ -415,7 +423,7 @@ function Manager.takePrefetched(dql, r)
     local w = p.widget
     dql.mdict_prefetch = nil
     if not w then return nil end
-    if p.width ~= dql.content_width or p.height ~= dql.definition_height then
+    if p.width ~= dql.content_width or p.height ~= dql.definition_height or p.font ~= dql.dict_font_size then
         w:free()
         return nil
     end
@@ -425,8 +433,49 @@ function Manager.takePrefetched(dql, r)
     return w
 end
 
+local function is_web(r) return r and r.mdict and not r.mdict_note end
+
+-- With one page (the Kindle's browser): the MDict result nearest to the shown one, in the
+-- way the reader moves first.
+local function nearest_web(dql, step)
+    for _, dir in ipairs({ step, -step }) do
+        local i = dql.dict_index + dir
+        while dql.results[i] do
+            if is_web(dql.results[i]) then return i end
+            i = i + dir
+        end
+    end
+end
+
+--- With one page (the Kindle's browser): keeps the MDict result the reader moves away from
+-- to another dictionary's (its widget and the pages drawn), for when they come back.
+-- w: the widget, r: its result. Returns true when it is kept (else the caller frees it).
+function Manager.keep(state, dql, w, r)
+    local renderer = Manager.renderer
+    local settings = state.settings or {}
+    if settings.prefetch == false or not (renderer and renderer.max_slots < 2) then return false end
+    local box = w and w.htmlbox_widget
+    if not (box and r and dql.results) then return false end
+    local shown = dql.results[dql.dict_index]
+    local p = dql.mdict_prefetch
+    -- the same result again (a new font size), or the one kept or laid out ahead is wanted
+    if shown == r or (p and p.r == shown) then return false end
+    local index
+    for i, x in ipairs(dql.results) do
+        if x == r then index = i end
+    end
+    if not index then return false end
+    Manager.dropPrefetch(dql)
+    box:stopWork()
+    if box.slot and box.slot.owner == box then box.slot.held = true end
+    dql.mdict_prefetch = { r = r, index = index, widget = w, kept = true,
+        width = dql.content_width, height = dql.definition_height, font = dql.dict_font_size }
+    return true
+end
+
 --- After a popup shows a result: lays out the next one (in the direction the reader
--- moves) in the background, if it is an MDict result.
+-- moves) in the background, if it is an MDict result. With one page (the Kindle's
+-- browser), the nearest MDict result instead, while another dictionary's result is shown.
 function Manager.prefetch(state, dql)
     if dql.is_wiki or not dql.results or not dql.dict_index then return end
     local settings = state.settings or {}
@@ -436,18 +485,24 @@ function Manager.prefetch(state, dql)
     dql.mdict_last_index = dql.dict_index
     local step = (last and dql.dict_index < last) and -1 or 1
     local index = dql.dict_index + step
-    local r = dql.results[index]
+    if Manager.renderer and Manager.renderer.max_slots < 2 then
+        -- the page belongs to the shown entry: what was kept or laid out ahead stays as it is
+        if dql.mdict_widget then return end
+        index = nearest_web(dql, step)
+    end
+    local r = index and dql.results[index]
     local p = dql.mdict_prefetch
     if p and p.r == r then return end
     Manager.dropPrefetch(dql)
-    if not (r and r.mdict and not r.mdict_note) then return end
+    if not is_web(r) then return end
     local renderer = Manager.get(state)
-    -- with one page (the Kindle's browser), laying out ahead would take the shown result's
-    if not (renderer and renderer.schedule) or renderer.max_slots < 2 then return end
+    if not (renderer and renderer.schedule) then return end
+    -- with one page, laying out ahead while an MDict result is shown would take its page
+    if renderer.max_slots < 2 and dql.mdict_widget then return end
     local avoid = {}
     local shown = dql.mdict_widget and dql.mdict_widget.htmlbox_widget
     if shown and shown.slot then avoid[shown.slot.id] = true end
-    p = { r = r, index = index, width = dql.content_width, height = dql.definition_height }
+    p = { r = r, index = index, width = dql.content_width, height = dql.definition_height, font = dql.dict_font_size }
     dql.mdict_prefetch = p
     p.job = renderer:startJob(function()
         local w, err = Manager.widget(state, dql, r, { definition = r.definition, avoid = avoid, background = true })

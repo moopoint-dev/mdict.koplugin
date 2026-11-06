@@ -260,7 +260,8 @@ function WebHtmlBoxWidget:getSinglePageHeight()
     return nil
 end
 
-function WebHtmlBoxWidget:free()
+--- Stops drawing pages ahead (the widget is put aside, its pages kept).
+function WebHtmlBoxWidget:stopWork()
     self:freeBb()
     if self._prefetch then
         UIManager:unschedule(self._prefetch)
@@ -270,6 +271,10 @@ function WebHtmlBoxWidget:free()
         self.renderer:cancelJob(self.page_job)
         self.page_job = nil
     end
+end
+
+function WebHtmlBoxWidget:free()
+    self:stopWork()
     self:_dropPages()
     self.freed = true
 end

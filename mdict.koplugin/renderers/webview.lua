@@ -165,7 +165,11 @@ end
 function WebRenderer:startJob(fn, on_done, delay)
     assert(self.schedule, "no scheduler for background jobs")
     local job = { on_done = on_done }
-    job.co = coroutine.create(function() return fn(job) end)
+    job.co = coroutine.create(function()
+        -- cancelled before it began: nothing to wait for
+        if job.cancelled then error(WebRenderer.CANCELLED, 0) end
+        return fn(job)
+    end)
     self.jobs[job.co] = job
     job.step = function()
         job.scheduled = false
