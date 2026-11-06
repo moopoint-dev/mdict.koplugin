@@ -61,6 +61,7 @@ local WebScrollWidget = ScrollHtmlWidget:extend{
     avoid_slots = nil, -- renderer slots not to use (see WebHtmlBoxWidget)
     label = nil, -- names the entry in the timing log
     background = false, -- laid out ahead by a background job
+    grey_pages = false, -- keep pages in 8-bit grey (a grey e-ink screen)
 }
 
 local function new_box(o, vertical)
@@ -79,6 +80,7 @@ local function new_box(o, vertical)
         avoid_slots = o.avoid_slots,
         label = o.label,
         background = o.background,
+        grey_pages = o.grey_pages,
     }
 end
 

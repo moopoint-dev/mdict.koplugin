@@ -22,6 +22,7 @@ local WebHtmlBoxWidget = HtmlBoxWidget:extend{
     avoid_slots = nil, -- renderer slot ids not to use (the shown entry's, when laying out ahead)
     label = nil, -- for the timing log
     background = false, -- laid out ahead, by a background job
+    grey_pages = false, -- pages kept in 8-bit grey (a grey e-ink screen): a quarter of the memory
 }
 
 function WebHtmlBoxWidget:init()
@@ -116,9 +117,20 @@ function WebHtmlBoxWidget:_pageBb(n)
     if bb and not self.page_stale[n] then return bb end
     local cached = bb ~= nil
     if cached then logger.info("MDict: drawing page", n, "again: it was captured before the WebView had drawn it") end
-    bb = bb or Blitbuffer.new(self.dimen.w, self.dimen.h, Blitbuffer.TYPE_BBRGB32)
+    bb = bb or Blitbuffer.new(self.dimen.w, self.dimen.h, self.grey_pages and Blitbuffer.TYPE_BB8 or Blitbuffer.TYPE_BBRGB32)
     local timing
-    if ok then ok, err, timing = self.renderer:renderPage(self.slot, n - 1, bb.data) end
+    if ok then
+        -- renderers draw RGBA; a grey page gets it through a buffer of its own while drawn
+        local target = bb
+        if self.grey_pages then
+            target = Blitbuffer.new(self.dimen.w, self.dimen.h, Blitbuffer.TYPE_BBRGB32)
+        end
+        ok, err, timing = self.renderer:renderPage(self.slot, n - 1, target.data)
+        if target ~= bb then
+            if ok then bb:blitFrom(target, 0, 0, 0, 0, self.dimen.w, self.dimen.h) end
+            target:free()
+        end
+    end
     if not ok then
         logger.warn("MDict: page render failed:", err)
         bb:fill(Blitbuffer.COLOR_WHITE)

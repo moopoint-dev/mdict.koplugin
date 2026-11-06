@@ -21,7 +21,26 @@ function mt:darkenRect(x, y, w, h)
     self.darkened = (self.darkened or 0) + 1
 end
 function mt:paintRect() end
-function mt:blitFrom() end
+function mt:getType() return self.type end
+-- copies pixels; into TYPE_BB8, as grey (stored in all four bytes, as KOReader weighs the channels)
+function mt:blitFrom(src, dx, dy, sx, sy, w, h)
+    if not (src and src.data and self.data) then return end
+    dx, dy, sx, sy = dx or 0, dy or 0, sx or 0, sy or 0
+    w = math.min(w or src.w, src.w - sx, self.w - dx)
+    h = math.min(h or src.h, src.h - sy, self.h - dy)
+    local grey = self.type == BB.TYPE_BB8 and src.type ~= BB.TYPE_BB8
+    for y = 0, h - 1 do
+        for x = 0, w - 1 do
+            local s, d = ((sy + y) * src.w + sx + x) * 4, ((dy + y) * self.w + dx + x) * 4
+            if grey then
+                local v = math.floor((src.data[s] * 4898 + src.data[s + 1] * 9618 + src.data[s + 2] * 1869) / 16384)
+                self.data[d], self.data[d + 1], self.data[d + 2], self.data[d + 3] = v, v, v, 255
+            else
+                ffi.copy(self.data + d, src.data + s, 4)
+            end
+        end
+    end
+end
 -- share of non-white pixels
 function mt:inkRatio()
     local n, ink = self.w * self.h, 0

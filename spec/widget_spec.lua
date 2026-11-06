@@ -74,7 +74,7 @@ describe("WebView widgets", function()
             html_link_tapped_callback = function(link) table.insert(links_tapped, link) end,
         }
         for k, v in pairs(extra or {}) do
-            if k == "vertical_hint" then o[k] = v else o.entry[k] = v end
+            if k == "vertical_hint" or k == "grey_pages" then o[k] = v else o.entry[k] = v end
         end
         return assert(WebScrollWidget.create(o))
     end
@@ -345,6 +345,22 @@ describe("WebView widgets", function()
         local e = widget_for(entry("Apple"))
         assert.equal(e.htmlbox_widget, e.htmlbox_widget.slot.owner)
         for _, w in ipairs({ e, d, c, a }) do w:free() end
+    end)
+
+    it("keeps pages in grey for grey e-ink screens", function()
+        local colour = widget_for(entry("Apple"))
+        local grey = widget_for(entry("Apple"), { grey_pages = true })
+        local a, b = colour.htmlbox_widget, grey.htmlbox_widget
+        a:_render()
+        b:_render()
+        assert.equal(Blitbuffer.TYPE_BBRGB32, a.page_cache[1]:getType())
+        assert.equal(Blitbuffer.TYPE_BB8, b.page_cache[1]:getType())
+        local expected = Blitbuffer.new(a.dimen.w, a.dimen.h, Blitbuffer.TYPE_BB8)
+        expected:blitFrom(a.page_cache[1], 0, 0, 0, 0, a.dimen.w, a.dimen.h)
+        assert.equal(expected:digest(), b.page_cache[1]:digest())
+        expected:free()
+        colour:free()
+        grey:free()
     end)
 
     it("opens at an anchor", function()
