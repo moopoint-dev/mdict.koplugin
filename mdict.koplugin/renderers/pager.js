@@ -33,6 +33,7 @@
     loadedScripts: {},
     scripts: false, // a script of an entry ran in this document (its listeners stay)
     overlays: [], // viewers scripts opened over the entry (see markOverlays)
+    rectScale: 1, // see scaled()
   };
 
   // CSS pixels left and right of a page of horizontal text (scaled with the entry), where what
@@ -284,6 +285,37 @@
 
   function content() { return el("mdict-content"); }
 
+  // Boxes of what the entry holds, in viewport pixels. Chromium before 128 gives them in the
+  // pixels of the zoomed element that holds them (the viewport's divided by the text size):
+  // taps then found their target pages too early, and links were missed.
+  function scaled(r) {
+    var s = state.rectScale;
+    if (s === 1) return r;
+    return { left: r.left * s, top: r.top * s, right: r.right * s, bottom: r.bottom * s,
+             width: r.width * s, height: r.height * s };
+  }
+  function rectsOf(node) {
+    var list = node.getClientRects();
+    return state.rectScale === 1 ? list : Array.prototype.map.call(list, scaled);
+  }
+  function boxOf(node) { return scaled(node.getBoundingClientRect()); }
+
+  // Whether this Chromium does that: a 10 px box in an element zoomed twice measures 10, not 20.
+  var zoomedBoxes = null;
+  function boxesZoomed() {
+    if (zoomedBoxes === null) {
+      var probe = document.createElement("mdict-probe");
+      probe.style.cssText = "display: block !important; position: absolute !important;"
+        + " visibility: hidden !important; zoom: 2 !important";
+      probe.innerHTML = '<mdict-probe style="display: block !important; width: 10px !important;'
+        + ' height: 10px !important; padding: 0 !important; border: 0 !important; zoom: 1 !important"></mdict-probe>';
+      document.body.appendChild(probe);
+      zoomedBoxes = probe.firstChild.getBoundingClientRect().width < 15;
+      document.body.removeChild(probe);
+    }
+    return zoomedBoxes;
+  }
+
   var ATOMIC = { IMG: true, svg: true, VIDEO: true, CANVAS: true, IFRAME: true, OBJECT: true, EMBED: true };
 
   // False for content the entry keeps out of view, such as closed <details>
@@ -328,9 +360,9 @@
       if (node.nodeType === 3) {
         if (!node.data.trim() || !shown(node)) continue;
         range.selectNodeContents(node);
-        rects = range.getClientRects();
+        rects = rectsOf(range);
       } else if (ATOMIC[node.tagName] && shown(node)) {
-        rects = node.getClientRects();
+        rects = rectsOf(node);
       } else {
         continue;
       }
@@ -366,7 +398,7 @@
       if (!len || !shown(node)) continue;
       total += len;
       range.selectNodeContents(node);
-      var rects = range.getClientRects(), out = false;
+      var rects = rectsOf(range), out = false;
       for (var i = 0; i < rects.length && !out; i++) {
         var r = rects[i];
         if (!(r.width > 0 && r.height > 0)) continue;
@@ -400,9 +432,9 @@
       if (node.nodeType === 3) {
         if (!node.data.trim() || !shown(node)) continue;
         range.selectNodeContents(node);
-        rects = range.getClientRects();
+        rects = rectsOf(range);
       } else if (ATOMIC[node.tagName] && shown(node)) {
-        rects = [node.getBoundingClientRect()];
+        rects = [boxOf(node)];
       } else {
         continue;
       }
@@ -556,7 +588,7 @@
 
   function pageOfElement(target) {
     if (!target) return -1;
-    var rects = target.getClientRects();
+    var rects = rectsOf(target);
     for (var i = 0; i < rects.length; i++) {
       if (rects[i].width > 0 || rects[i].height > 0) return pageOfRect(rects[i]);
     }
@@ -567,7 +599,7 @@
       if (!node.data.trim()) continue;
       var range = document.createRange();
       range.selectNodeContents(node);
-      var rr = range.getClientRects();
+      var rr = rectsOf(range);
       if (rr.length) return pageOfRect(rr[0]);
     }
     return -1;
@@ -617,7 +649,7 @@
     if (window.jQuery && window.jQuery.fx) window.jQuery.fx.off = true;
     var hit = x === undefined ? null : document.elementFromPoint(x, y);
     if (!hit || !target.contains(hit)) {
-      var r = target.getBoundingClientRect();
+      var r = boxOf(target);
       hit = target;
       x = r.left + r.width / 2;
       y = r.top + r.height / 2;
@@ -750,6 +782,7 @@
       content().style.transform = "";
       content().style.clipPath = "";
       zoom.style.zoom = String(opts.zoom || 1);
+      state.rectScale = boxesZoomed() ? (opts.zoom || 1) : 1;
       document.documentElement.style.setProperty("--mdict-gutter", GUTTER * (opts.zoom || 1) + "px");
       zoom.innerHTML = opts.html || "";
       state.overlays = [];
@@ -803,7 +836,7 @@
   function hitInside(root, x, y) {
     var all = root.getElementsByTagName("*"), best = root;
     for (var i = 0; i < all.length; i++) {
-      var r = all[i].getBoundingClientRect();
+      var r = boxOf(all[i]);
       if (r.width > 0 && r.height > 0 && x >= r.left && x < r.right && y >= r.top && y < r.bottom && shown(all[i])) {
         best = all[i];
       }
@@ -819,7 +852,7 @@
     // Chromium before LayoutNG (the Kindle's 75) can miss a fixed viewer inside the
     // columns when hit testing: a tap within its box is on it
     if (overlay && !(hit && overlay.contains(hit))) {
-      var o = overlay.getBoundingClientRect();
+      var o = boxOf(overlay);
       if (x >= o.left && x < o.right && y >= o.top && y < o.bottom) hit = hitInside(overlay, x, y);
     }
     if (hit && !zoom.contains(hit)) hit = null;
@@ -871,13 +904,13 @@
   // The boxes a tap on a link can hit: its line boxes, and the boxes of pictures
   // and blocks inside it, which can be much taller than its line.
   function linkRects(a) {
-    var rects = Array.prototype.slice.call(a.getClientRects());
+    var rects = Array.prototype.slice.call(rectsOf(a));
     var inner = a.getElementsByTagName("*");
     for (var i = 0; i < inner.length; i++) {
       var e = inner[i];
       if (!ATOMIC[e.tagName] && getComputedStyle(e).display === "inline") continue;
       if (!shown(e)) continue;
-      rects = rects.concat(Array.prototype.slice.call(e.getClientRects()));
+      rects = rects.concat(Array.prototype.slice.call(rectsOf(e)));
     }
     return rects;
   }
@@ -1016,7 +1049,7 @@
 
   function rangeResult(range) {
     var rects = [];
-    var rr = range.getClientRects();
+    var rr = rectsOf(range);
     for (var i = 0; i < rr.length; i++) {
       if (visible(rr[i])) rects.push(toDevice(rr[i]));
     }
@@ -1083,7 +1116,7 @@
           var range = document.createRange();
           range.setStart(rn.nodes[s], at - rn.starts[s]);
           range.setEnd(rn.nodes[e], at + term.length - rn.starts[e]);
-          var rr = range.getClientRects();
+          var rr = rectsOf(range);
           for (var i = 0; i < rr.length; i++) {
             if (rr[i].width === 0 && rr[i].height === 0) continue;
             var p = pageOfRect(rr[i]);

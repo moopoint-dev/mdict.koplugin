@@ -7,10 +7,18 @@
  *        [--writing auto|horizontal|vertical] [--font kind=Name]... [--find term]
  *        [--anchor id] [--max-pages N] [--pagination auto|columns|slices]
  *        [--tap-selector css] [--user-font file[:all|latin|cjk]] [--skip-script name.js]...
- *        [--cpu-slowdown N] entry.html...
+ *        [--cpu-slowdown N] [--zoom N] [--cdp url] entry.html...
  *
- * --tap-selector taps the first matching element on page 1 (e.g. an
- * expandable section's summary) and saves the pages again as *-tap-pN.png.
+ * --tap-selector taps the first matching element on the page where it starts
+ * (e.g. an expandable section's summary) and saves the pages again as
+ * *-tap-pN.png. It prints that page as tapPage, and as replayPages the pages
+ * of the entry laid out again with the tap replayed (as after a nested lookup).
+ *
+ * --zoom is the text size setting (1.25 for 125 %).
+ *
+ * --cdp drives the first tab of a Chromium that is already running, such as an
+ * older one like those of e-readers: Chrome on an Android emulator, after
+ * `adb forward tcp:9222 localabstract:chrome_devtools_remote`, is http://127.0.0.1:9222.
  *
  * --cpu-slowdown throttles the page's CPU N times, roughly like a slow e-reader.
  *
@@ -43,6 +51,8 @@ for (let i = 2; i < process.argv.length; i++) {
   else if (a === "--user-font") opts.userFont = next();
   else if (a === "--skip-script") opts.skipScripts.push(next());
   else if (a === "--cpu-slowdown") opts.cpuSlowdown = +next();
+  else if (a === "--zoom") opts.zoom = +next();
+  else if (a === "--cdp") opts.cdp = next();
   else opts.entries.push(a);
 }
 
@@ -51,15 +61,13 @@ const types = { css: "text/css", js: "text/javascript", png: "image/png", jpg: "
 
 (async () => {
   fs.mkdirSync(opts.out, { recursive: true });
-  const browser = await chromium.launch();
-  const context = await browser.newContext({ viewport: { width: opts.w, height: opts.h }, deviceScaleFactor: opts.dpr });
+  const browser = opts.cdp ? await chromium.connectOverCDP(opts.cdp) : await chromium.launch();
+  const context = opts.cdp ? browser.contexts()[0]
+    : await browser.newContext({ viewport: { width: opts.w, height: opts.h }, deviceScaleFactor: opts.dpr });
   const requests = [];
-  for (const entry of opts.entries) {
-    const args = [path.join(root, "tools/pager-test/prepare.lua"), entry];
-    for (const f of opts.fonts) args.push("--font", f);
-    if (opts.userFont) args.push("--user-font", opts.userFont, "--res", opts.res);
-    const prep = JSON.parse(execFileSync("luajit", args, { maxBuffer: 1 << 28 }).toString());
-    const page = await context.newPage();
+  let prep, shared = null;
+  // a page that serves the entry being tested
+  const setup = async (page) => {
     page.on("console", (m) => { if (m.type() === "error") console.error("console:", m.text()); });
     page.on("pageerror", (e) => console.error("pageerror:", e.message));
     await page.route("**/*", async (route) => {
@@ -82,6 +90,25 @@ const types = { css: "text/css", js: "text/javascript", png: "image/png", jpg: "
         done(id, json) { this._res[id] = json; },
       };
     });
+  };
+  for (const entry of opts.entries) {
+    const args = [path.join(root, "tools/pager-test/prepare.lua"), entry];
+    for (const f of opts.fonts) args.push("--font", f);
+    if (opts.userFont) args.push("--user-font", opts.userFont, "--res", opts.res);
+    prep = JSON.parse(execFileSync("luajit", args, { maxBuffer: 1 << 28 }).toString());
+    let page;
+    if (opts.cdp) {
+      // a browser on Android opens no tabs for a driver: its first one serves every entry
+      if (!shared) {
+        shared = context.pages()[0];
+        await shared.setViewportSize({ width: opts.w, height: opts.h });
+        await setup(shared);
+      }
+      page = shared;
+    } else {
+      page = await context.newPage();
+      await setup(page);
+    }
     if (opts.cpuSlowdown > 1) {
       const cdp = await context.newCDPSession(page);
       await cdp.send("Emulation.setCPUThrottlingRate", { rate: opts.cpuSlowdown });
@@ -97,10 +124,11 @@ const types = { css: "text/css", js: "text/javascript", png: "image/png", jpg: "
         return JSON.parse(KOBridge._res[id] || "null");
       }, { id, name, a });
     };
-    const html = prep.entry;
+    const dpr = await page.evaluate(() => devicePixelRatio);
+    const entryArgs = { html: prep.entry, writing: opts.writing, eink: !!opts.eink, runScripts: true,
+      skipScripts: opts.skipScripts, anchor: opts.anchor, pagination: opts.pagination, zoom: opts.zoom };
     const t0 = Date.now();
-    const res = await op("setEntry", { html, writing: opts.writing, eink: !!opts.eink, runScripts: true,
-      skipScripts: opts.skipScripts, anchor: opts.anchor, pagination: opts.pagination });
+    const res = await op("setEntry", entryArgs);
     res.ms = Date.now() - t0;
     const base = path.basename(entry, ".html");
     const n = Math.min(res.pages || 1, opts.maxPages);
@@ -113,26 +141,43 @@ const types = { css: "text/css", js: "text/javascript", png: "image/png", jpg: "
     res.links = links.length;
     res.firstLinks = links.slice(0, 3);
     // a hold in the middle-ish of the first page
-    res.textAt = await op("textAt", { x0: Math.round(opts.w * opts.dpr * 0.5), y0: Math.round(opts.h * opts.dpr * 0.3) });
+    res.textAt = await op("textAt", { x0: Math.round(opts.w * dpr * 0.5), y0: Math.round(opts.h * dpr * 0.3) });
     if (opts.find) {
       const f = await op("find", { term: opts.find });
       res.find = Object.fromEntries(Object.entries(f).map(([k, v]) => [k, v.length]));
     }
     if (opts.tapSelector) {
-      const at = await page.evaluate((sel) => {
-        const e = document.querySelector(sel);
-        if (!e) return null;
-        const r = e.getClientRects()[0];
-        return r && { x: r.left + Math.min(r.width / 2, 20), y: r.top + r.height / 2 };
-      }, opts.tapSelector);
+      let at = null;
+      for (let p = 0; p < (res.pages || 1) && !at; p++) {
+        await op("showPage", { page: p });
+        at = await page.evaluate(({ sel, zoom }) => {
+          const e = document.querySelector(sel);
+          const r = e && e.getClientRects()[0];
+          if (!r) return null;
+          // Chromium before 128 measures what a zoomed element holds in its own pixels
+          const probe = document.createElement("div");
+          probe.style.cssText = "position: absolute; zoom: 2";
+          probe.innerHTML = '<div style="width: 10px"></div>';
+          document.body.appendChild(probe);
+          const s = probe.firstChild.getBoundingClientRect().width < 15 ? zoom : 1;
+          probe.remove();
+          const x = (r.left + Math.min(r.width / 2, 20)) * s, y = (r.top + r.height / 2) * s;
+          return x >= 0 && x < innerWidth && y >= 0 && y < innerHeight ? { x, y } : null;
+        }, { sel: opts.tapSelector, zoom: opts.zoom || 1 });
+        if (at) res.tapPage = p;
+      }
       if (at) {
         const t1 = Date.now();
-        res.tap = await op("tap", { x: Math.round(at.x * opts.dpr), y: Math.round(at.y * opts.dpr) });
+        res.tap = await op("tap", { x: Math.round(at.x * dpr), y: Math.round(at.y * dpr) });
         res.tapMs = Date.now() - t1;
         const m = Math.min((res.tap && res.tap.pages) || 1, opts.maxPages);
         for (let p = 0; p < m; p++) {
           await op("showPage", { page: p });
           await page.screenshot({ path: path.join(opts.out, `${base}-tap-p${p}.png`) });
+        }
+        if (res.tap && res.tap.path) {
+          const again = await op("setEntry", Object.assign({}, entryArgs, { clicks: [res.tap.path] }));
+          res.replayPages = again && again.pages;
         }
       } else {
         res.tap = "selector not visible";
@@ -140,7 +185,7 @@ const types = { css: "text/css", js: "text/javascript", png: "image/png", jpg: "
     }
     res.entry = base;
     console.log(JSON.stringify(res));
-    await page.close();
+    if (!opts.cdp) await page.close();
   }
   const notFound = requests.filter((p) => !p.startsWith("/__") && !fs.existsSync(path.join(opts.res, p)));
   if (notFound.length) console.error("missing resources:", [...new Set(notFound)].slice(0, 10));
