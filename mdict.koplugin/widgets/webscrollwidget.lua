@@ -55,6 +55,7 @@ local WebScrollWidget = ScrollHtmlWidget:extend{
     doc = nil, -- document options for the renderer
     entry = nil, -- entry options for the renderer
     invert_vertical_swipes = false,
+    flash_turns = false, -- page turns flash the screen (clears e-ink ghosting)
     vertical_hint = false, -- lay out for vertical text first (the dictionary's last entry was vertical)
     on_layout = nil, -- called with the box once the entry is laid out
     avoid_slots = nil, -- renderer slots not to use (see WebHtmlBoxWidget)
@@ -166,6 +167,26 @@ function WebScrollWidget:isVertical()
     return self.htmlbox_widget.vertical
 end
 
+-- After a page turn: a flashing refresh instead of the plain one, when the reader wants it.
+-- (Both refreshes cover the same area; UIManager keeps the stronger one.)
+function WebScrollWidget:_flashTurn(before)
+    if self.flash_turns and self.htmlbox_widget.page_number ~= before then
+        UIManager:setDirty(self.dialog, function() return "flashpartial", self.dimen end)
+    end
+end
+
+function WebScrollWidget:scrollText(direction)
+    local before = self.htmlbox_widget.page_number
+    ScrollHtmlWidget.scrollText(self, direction)
+    self:_flashTurn(before)
+end
+
+function WebScrollWidget:scrollToRatio(ratio)
+    local before = self.htmlbox_widget.page_number
+    ScrollHtmlWidget.scrollToRatio(self, ratio)
+    self:_flashTurn(before)
+end
+
 function WebScrollWidget:jumpToPage(page)
     local box = self.htmlbox_widget
     page = math.max(1, math.min(box.page_count, page))
@@ -174,7 +195,7 @@ function WebScrollWidget:jumpToPage(page)
     self:_updateScrollBar()
     box:freeBb()
     box:_render()
-    UIManager:setDirty(self.dialog, function() return "partial", self.dimen end)
+    UIManager:setDirty(self.dialog, function() return (self.flash_turns and "flashpartial" or "partial"), self.dimen end)
 end
 
 -- The entry changed size (a section was opened): new page count, same widget.

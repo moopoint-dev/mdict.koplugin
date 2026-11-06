@@ -349,6 +349,7 @@ function Manager.widget(state, dql, r, opts)
         dialog = dql,
         highlight_text_selection = true,
         invert_vertical_swipes = settings.invert_vertical_swipes,
+        flash_turns = settings.flash_page_turns and Device:hasEinkScreen() or false,
         html_link_tapped_callback = function(link)
             dql.html_dictionary_link_tapped_callback(dql.dictionary, link)
         end,

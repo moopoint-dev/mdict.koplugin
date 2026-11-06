@@ -187,6 +187,23 @@ describe("WebView widgets", function()
         assert.is_true(box.dimen.h < 400)
         assert.equal(618, w.v_scroll_bar.width)
         assert.is_true(w.v_scroll_bar.low > 0)
+        -- page turns refresh without a flash, unless the reader wants one (e-ink ghosting)
+        local function refresh()
+            local d = UIManager.dirty[#UIManager.dirty]
+            return (d[2]())
+        end
+        w:onScrollText(nil, { direction = "west" })
+        assert.equal("partial", refresh())
+        w.flash_turns = true
+        w:onScrollText(nil, { direction = "east" })
+        assert.equal("flashpartial", refresh())
+        local n = #UIManager.dirty
+        w:onScrollText(nil, { direction = "south" }) -- (changes dictionary, turns no page)
+        assert.equal(n, #UIManager.dirty)
+        w:jumpToPage(1)
+        assert.equal("flashpartial", refresh())
+        w:jumpToPage(2)
+        w.flash_turns = false
         -- the left half goes forward past the last page, to the next result
         w:jumpToPage(box.page_count)
         w:onTapScrollText(nil, { pos = Geom:new{ x = 10, y = 100 } })

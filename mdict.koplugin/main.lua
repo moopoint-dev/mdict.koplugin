@@ -431,6 +431,17 @@ function MDict:displayItems()
             },
         },
         {
+            text = _("Flash the screen on page turns"),
+            help_text = _("Each page turn in an entry fully refreshes the popup, which clears the ghosts of earlier "
+                .. "pages that e-ink screens can show, at the cost of a flash."),
+            enabled_func = function() return require("device"):hasEinkScreen() end,
+            checked_func = function() return s.flash_page_turns == true end,
+            callback = function()
+                s.flash_page_turns = not s.flash_page_turns or nil
+                save_settings()
+            end,
+        },
+        {
             text = _("Reverse page turn swipes in vertical text"),
             help_text = _("By default, swiping from left to right turns to the next page of a vertical entry."),
             checked_func = function() return s.invert_vertical_swipes == true end,
