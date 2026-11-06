@@ -56,7 +56,8 @@ function WebRenderer.new(opts)
 end
 
 function WebRenderer:_log(level, ...)
-    if self.logger and self.logger[level] then self.logger[level](self.logger, "MDict WebView:", ...) end
+    -- KOReader's logger takes plain calls (logger.warn(...)), not method calls
+    if self.logger and self.logger[level] then self.logger[level]("MDict WebView:", ...) end
 end
 
 function WebRenderer:_nextId()
