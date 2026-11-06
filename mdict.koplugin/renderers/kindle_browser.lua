@@ -117,6 +117,39 @@ function KB.oomLines()
     return #lines > 0 and table.concat(lines, " | ") or nil
 end
 
+-- What the kernel said about the e-ink screen's controller (errors such as underruns can
+-- leave pages half drawn): the lines since the last call, at most a few, or nil.
+KB.SCREEN_WORDS = { "epdc", "underrun", "collision", "waveform", "mxcfb" }
+function KB.screenLines()
+    local ok, p = pcall(io.popen, KB.DMESG .. " 2>/dev/null")
+    if not ok or not p then return nil end
+    local all = {}
+    for line in p:lines() do
+        local l = line:lower()
+        for _, w in ipairs(KB.SCREEN_WORDS) do
+            if l:find(w, 1, true) then
+                all[#all + 1] = line
+                break
+            end
+        end
+    end
+    p:close()
+    local last = KB.screen_seen
+    KB.screen_seen = all[#all] or last
+    local from = 1
+    if last then
+        for i = #all, 1, -1 do
+            if all[i] == last then
+                from = i + 1
+                break
+            end
+        end
+    end
+    local new = {}
+    for i = math.max(from, #all - 3), #all do new[#new + 1] = all[i]:sub(1, 160) end
+    return #new > 0 and table.concat(new, " | ") or nil
+end
+
 --- Ends browsers the plugin started that outlived it (KOReader crashed, or was killed):
 -- Chromium 75 keeps running when its DevTools pipe closes. Returns how many it ended.
 function KB.killOrphans()
@@ -276,6 +309,8 @@ function KB.bridge(opts)
     end
     bridge.kindle = { cfg = cfg, info = info }
     bridge.memoryNote = function() return KB.memoryText(pid) end
+    bridge.screenNote = KB.screenLines
+    KB.screenLines() -- only what comes from now on
     return bridge
 end
 

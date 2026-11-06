@@ -137,6 +137,15 @@ function WebHtmlBoxWidget:_pageBb(n)
     elseif self.trace and not self.trace.logged then
         self.trace.logged = true
         logger.info(self:_timingText(timing))
+        -- the Kindle's: what the kernel said about the screen since the last entry (a moment
+        -- later, so that the page is not held up)
+        local bridge = self.renderer and self.renderer.bridge
+        if bridge and bridge.screenNote then
+            UIManager:scheduleIn(2, function()
+                local screen = bridge.screenNote()
+                if screen then logger.info("MDict: kernel e-ink messages: " .. screen) end
+            end)
+        end
     end
     -- captured before the WebView had drawn the page (after a picture viewer closes, that
     -- can take seconds on e-readers): shown if it is wanted now, and drawn again

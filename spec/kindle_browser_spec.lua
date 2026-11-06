@@ -71,6 +71,21 @@ describe("Kindle browser", function()
         KB.DMESG = dmesg
     end)
 
+    it("reports the kernel's new messages about the e-ink screen", function()
+        local dmesg = KB.DMESG
+        KB.screen_seen = nil
+        KB.DMESG = "printf '[1] usb ok\\n[2] mxc_epdc_fb: TCE underrun! Will continue to update panel\\n[3] wifi up\\n'"
+        assert.equal("[2] mxc_epdc_fb: TCE underrun! Will continue to update panel", KB.screenLines())
+        -- only what is new since the last time
+        assert.is_nil(KB.screenLines())
+        KB.DMESG = "printf '[2] mxc_epdc_fb: TCE underrun! Will continue to update panel\\n[5] wifi down\\n"
+            .. "[6] mxc_epdc_fb: Collision occurred\\n'"
+        assert.equal("[6] mxc_epdc_fb: Collision occurred", KB.screenLines())
+        KB.DMESG = "false"
+        assert.is_nil(KB.screenLines())
+        KB.DMESG, KB.screen_seen = dmesg, nil
+    end)
+
     it("ends browsers it started that outlived KOReader, and nothing else", function()
         local dir = helper.tmpdir("kb-orphan")
         local function start(env)
