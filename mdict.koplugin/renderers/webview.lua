@@ -386,12 +386,13 @@ function WebRenderer:find(slot, term) return self:op(slot.id, "find", { term = t
 function WebRenderer:pageOfAnchor(slot, id) return self:op(slot.id, "pageOfAnchor", { id = id }) end
 
 --- A tap at (x, y) on the shown page. Returns { handled = false } when it did nothing,
--- { handled, same = true } when it was taken but changed nothing, or { handled, path, pages,
--- page } when it changed the entry (which is laid out again). With link, the tap is on a link
--- and is handled only when one of the entry's scripts takes it over.
+-- { handled, same = true } when it was taken but changed nothing, { handled, jump = true, page }
+-- when a script jumped to another part of the entry (page: its page, not shown yet), or
+-- { handled, path, pages, page } when it changed the entry (which is laid out again). With
+-- link, the tap is on a link and is handled only when one of the entry's scripts takes it over.
 function WebRenderer:tap(slot, x, y, link)
     local r, err = self:op(slot.id, "tap", { x = x, y = y, link = link or nil })
-    if r and r.handled and not r.same then slot.pages, slot.page = r.pages, r.page end
+    if r and r.handled and not r.same and not r.jump then slot.pages, slot.page = r.pages, r.page end
     if r and r.ms then self:_log("dbg", "tap", json.encode(r.ms)) end
     return r, err
 end

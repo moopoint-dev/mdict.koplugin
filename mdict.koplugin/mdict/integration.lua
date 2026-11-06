@@ -284,7 +284,8 @@ function Integration.install(state)
     ReaderDictionary.onHtmlDictionaryLinkTapped = function(rd, dictionary, link)
         local uri = link and link.uri
         if uri and Integration.state.library:byTitle(dictionary) then
-            if uri:sub(1, 1) == "#" then return end -- handled inside the entry
+            -- handled inside the entry (bword://#x: a place in the same entry, nothing to look up)
+            if uri:sub(1, 1) == "#" or uri:find("^bword://#") then return end
             local sound = uri:match("^mdict%-sound://(.*)$")
             if sound then
                 if Integration.state.playSound then Integration.state.playSound(dictionary, sound) end

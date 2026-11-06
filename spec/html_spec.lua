@@ -40,6 +40,9 @@ describe("html", function()
 
     it("rewrites link schemes", function()
         assert.equal('<a href="bword://run#s1">', Html.rewriteLinks('<a href="entry://run#s1">'))
+        -- a place in the same entry: no lookup
+        assert.equal('<a href="#s1" onclick="go()">', Html.rewriteLinks('<a href="entry://#s1" onclick="go()">'))
+        assert.equal("<a HREF='#s1'>", Html.rewriteLinks("<a HREF='ENTRY://#s1'>"))
         assert.equal("<a href='mdict-sound://a/b.aac'>", Html.rewriteLinks("<a href='sound://a/b.aac'>"))
         assert.equal('<img src="img/x.png">', Html.rewriteLinks('<img src="file://img/x.png">'))
         assert.equal('<a href="https://example.com">', Html.rewriteLinks('<a href="https://example.com">'))

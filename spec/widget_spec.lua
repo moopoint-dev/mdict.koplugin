@@ -363,6 +363,34 @@ describe("WebView widgets", function()
         grey:free()
     end)
 
+    it("jumps to places in the entry, by link or by a script that scrolls there", function()
+        local filler = string.rep("<p>filler paragraph text</p>", 200)
+        local html = require("mdict/html").rewriteLinks('<p><a href="entry://#far">jump</a> '
+            .. '<span onclick="document.getElementById(\'far\').scrollIntoView()">button</span></p>'
+            .. filler .. '<p id="far">target</p><script>var loaded = true;</script>')
+        local w = widget_for(html)
+        local box = w.htmlbox_widget
+        box.dimen.x, box.dimen.y = 0, 0
+        assert.is_true(box.scripts)
+        local last, tapped = box.page_count, #links_tapped
+        assert.is_true(last > 1)
+        -- a link to a place in the same entry is not looked up
+        assert.is_true(box:onTapText(nil, { pos = text_center(box, "jump") }))
+        assert.equal(last, box.page_number)
+        assert.equal(tapped, #links_tapped)
+        -- a button whose script scrolls to the place goes to its page, the pages kept
+        w:jumpToPage(1)
+        assert.equal(1, box.page_number)
+        local cached = box.page_cache[1]
+        assert.is_true(box:onTapText(nil, { pos = text_center(box, "button") }))
+        assert.equal(last, box.page_number)
+        assert.equal(last, box.page_count)
+        assert.is_nil(box.entry.clicks)
+        w:jumpToPage(1)
+        assert.equal(cached, box.page_cache[1])
+        w:free()
+    end)
+
     it("opens at an anchor", function()
         local html = "<p>start</p>" .. string.rep("<p>filler paragraph text</p>", 200) .. '<p id="here">target</p>'
         local w = widget_for(html, { anchor = "here" })

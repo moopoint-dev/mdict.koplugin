@@ -165,17 +165,19 @@ end
 
 --- Rewrites MDict link schemes for KOReader:
 --   entry://word#anchor -> bword://word#anchor (native nested lookup)
+--   entry://#anchor     -> #anchor             (a place in the same entry)
 --   sound://path        -> mdict-sound://path   (handled by the plugin)
 --   file://path         -> path                 (relative resource)
 function Html.rewriteLinks(html)
-    html = gsub_at(html, "href", 1, "(%s[Hh][Rr][Ee][Ff]%s*=%s*)([\"'])([%a][%w+.-]*):(/?/?)", function(pre, q, scheme)
+    local link = "(%s[Hh][Rr][Ee][Ff]%s*=%s*)([\"'])([%a][%w+.-]*):(/?/?)(#?)"
+    html = gsub_at(html, "href", 1, link, function(pre, q, scheme, _, hash)
         local s = scheme:lower()
         if s == "entry" then
-            return pre .. q .. "bword://"
+            return pre .. q .. (hash == "#" and "#" or "bword://")
         elseif s == "sound" then
-            return pre .. q .. "mdict-sound://"
+            return pre .. q .. "mdict-sound://" .. hash
         elseif s == "file" then
-            return pre .. q
+            return pre .. q .. hash
         end
     end)
     html = gsub_at(html, "src", 1, "(%s[Ss][Rr][Cc]%s*=%s*)([\"'])[Ff][Ii][Ll][Ee]://", function(pre, q)

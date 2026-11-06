@@ -586,6 +586,28 @@
     return target;
   }
 
+  // Where a script of the entry tried to scroll to during a tap. The pager places the
+  // pages itself (scrolling is undone), so a button that jumps to a section of the
+  // entry goes to the page of that section instead.
+  var jump = null;
+  function noteJump(target) {
+    var zoom = el("mdict-zoom");
+    if (jump && target && target.nodeType === 1 && zoom && zoom.contains(target)) jump.target = target;
+  }
+  ["scrollIntoView", "scrollIntoViewIfNeeded"].forEach(function (name) {
+    var orig = Element.prototype[name];
+    if (!orig) return;
+    Element.prototype[name] = function () {
+      if (jump) return noteJump(this);
+      return orig.apply(this, arguments);
+    };
+  });
+  window.addEventListener("hashchange", function () {
+    var id = location.hash.slice(1);
+    try { id = decodeURIComponent(id); } catch (e) { /* keep it as it is */ }
+    noteJump(findAnchor(id));
+  });
+
   function pageOfElement(target) {
     if (!target) return -1;
     var rects = rectsOf(target);
@@ -903,16 +925,31 @@
     (async function () {
       var t = timer(), added = [];
       var w = watch(added);
-      var taken = activate(target, x, y, !!a.link);
-      if (a.link && !taken) {
+      var tapJump = jump = {};
+      var taken;
+      try {
+        taken = activate(target, x, y, !!a.link);
+      } catch (e) {
+        jump = null;
+        throw e;
+      }
+      if (a.link && !taken && !tapJump.target) {
+        jump = null;
         w.cancel();
         return done(opId, { handled: false });
       }
       var changed = await w.settle();
+      if (jump === tapJump) jump = null;
       t.mark("watch");
       // pages are still images: no focus rings on what a script focused
       var focused = document.activeElement;
       if (focused && focused !== document.body && focused.blur) focused.blur();
+      var to = tapJump.target && tapJump.target.isConnected ? tapJump.target : null;
+      if (!changed && to && !inOverlay) {
+        // a button that jumps to a section: the same pages, another one shown
+        var jp = pageOfElement(to);
+        if (jp >= 0) return done(opId, { handled: true, jump: true, page: jp, pages: state.pages, ms: t.done() });
+      }
       if (!changed) {
         return done(opId, inOverlay || a.link ? { handled: true, same: true } : { handled: false });
       }
@@ -924,7 +961,8 @@
         return done(opId, { handled: true, pages: state.pages, page: state.page, mode: state.mode, ms: t.done() });
       }
       await settleLayout({ imageTimeout: 1000 }, t);
-      var p = pageOfRange(spot);
+      var p = to && to.isConnected ? pageOfElement(to) : -1;
+      if (p < 0) p = pageOfRange(spot);
       if (p < 0 && target.isConnected) p = pageOfElement(target);
       state.page = Math.max(0, Math.min(state.pages - 1, p >= 0 ? p : shownPage));
       present();

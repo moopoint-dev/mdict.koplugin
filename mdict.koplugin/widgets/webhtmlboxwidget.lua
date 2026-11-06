@@ -306,8 +306,11 @@ function WebHtmlBoxWidget:onTapText(arg, ges)
     if not G_reader_settings:isFalse("tap_to_follow_links") then
         local link = self:getLinkByPosition(pos)
         if link then
-            local anchor = link.uri and link.uri:match("^#(.+)$")
+            -- a place in the same entry (bword://#x: one written as entry://#x elsewhere)
+            local anchor = link.uri and (link.uri:match("^#(.+)$") or link.uri:match("^bword://#(.+)$"))
             if anchor then
+                -- a script of the entry may take the link over (a button that also opens its section)
+                if self.scripts and self:_tapEntry(pos, true) then return true end
                 local r = self:_ensure() and self.renderer:pageOfAnchor(self.slot, anchor)
                 if r and r.page and r.page >= 0 and self.on_page_jump then
                     self.on_page_jump(r.page + 1)
@@ -337,6 +340,11 @@ function WebHtmlBoxWidget:_tapEntry(pos, link)
     local res = self.renderer:tap(self.slot, math.floor(pos.x), math.floor(pos.y), link)
     if not (res and res.handled) then return end
     if res.same then return true end
+    if res.jump then
+        -- a script jumped to another part of the entry: the pages stay as they are
+        if res.page and res.page >= 0 and self.on_page_jump then self.on_page_jump(res.page + 1) end
+        return true
+    end
     if res.path then
         self.entry.clicks = self.entry.clicks or {}
         table.insert(self.entry.clicks, res.path)
