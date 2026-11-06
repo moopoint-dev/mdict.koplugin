@@ -114,8 +114,10 @@ end
 function Manager.get(state)
     if Manager.renderer then
         local b = Manager.renderer.bridge
-        if b.alive and not b:alive() then
-            Manager.disable("the browser ended")
+        -- (the Kindle's: stopped here when memory runs low)
+        local ended = b.checkNow and b:checkNow()
+        if ended or (b.alive and not b:alive()) then
+            Manager.disable(ended or b.ended or "the browser ended")
             return nil
         end
         b.last_use = require("mdict/clock")()
@@ -172,8 +174,11 @@ function Manager.notify(reason)
     local text = _("MDict: WebView rendering failed; using the built-in renderer.")
     local Device = require("device")
     if Device.isKindle and Device:isKindle() then
+        reason = tostring(reason)
+        -- what kills it without a word is the kernel, when memory runs out
+        if reason:find("killed by signal 9", 1, true) then reason = _("the Kindle ran out of memory") end
         text = require("ffi/util").template(
-            _("MDict: the Kindle's browser cannot lay out entries (%1); using the built-in renderer."), tostring(reason))
+            _("MDict: the Kindle's browser cannot lay out entries (%1); using the built-in renderer."), reason)
     end
     UIManager:show(Notification:new{ text = text })
 end
@@ -181,6 +186,12 @@ end
 --- Gives up on the renderer for this session (after it failed on a real entry).
 function Manager.disable(reason)
     Manager.failed = reason or "failed"
+    local Device = require("device")
+    if Manager.failed:find("killed by signal 9", 1, true) and Device.isKindle and Device:isKindle() then
+        local b = Manager.renderer and Manager.renderer.bridge
+        info_log("the browser was killed; memory", b and b.memoryNote and b.memoryNote() or "?",
+            "; the kernel's last memory messages:", require("renderers/kindle_browser").oomLines() or "none")
+    end
     Manager.shutdown()
     Manager.notify(Manager.failed)
 end

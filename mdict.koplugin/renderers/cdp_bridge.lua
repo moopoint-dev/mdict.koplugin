@@ -15,6 +15,11 @@ screenshot makes the browser draw the page again (seconds on a Kindle). The view
 pixels taller than the page, and the page colours that strip below it with a different grey
 for each capture, so a frame drawn before the change is told apart and skipped. When no frame
 comes, a screenshot is taken instead.
+
+A watch (opts.watch) can be run every second while the bridge waits for the browser, and
+before each entry: given the bridge, it returns nothing, or why the browser must stop now
+(the Kindle running out of memory), and the bridge then ends it rather than wait for the
+kernel to.
 ]]
 
 local json = require("mdict/json")
@@ -32,6 +37,8 @@ Bridge.CAPTURE_WAIT = 4
 Bridge.CAST_WAIT = 3 -- seconds to wait for the screencast frame of a capture before taking a screenshot
 Bridge.MARK_PX = 16 -- device pixels of the strip below the page that tells frames apart
 Bridge.MARK_STEP = 36 -- grey levels between the strip's colours (36, 72 ... 252)
+Bridge.WATCH_EVERY = 1 -- seconds between runs of the watch while waiting
+Bridge.RELEASE_EVERY = 15 -- seconds at least between two requests to free memory
 
 Bridge.TYPES = {
     css = "text/css", js = "text/javascript", png = "image/png", jpg = "image/jpeg", jpeg = "image/jpeg",
@@ -94,6 +101,8 @@ function Bridge.new(opts)
         screencast = opts.screencast,
         cast_wait = opts.cast_wait or Bridge.CAST_WAIT,
         close_grace = opts.close_grace or 3,
+        watch = opts.watch,
+        next_watch = 0,
         slots = {},
         sessions = {}, -- sessionId -> slot
         outbox = {},
@@ -474,8 +483,44 @@ function Bridge:_handle(m)
     end
 end
 
+--- Asks the browser to free what memory it can (its caches, unused script memory), at most
+-- once every RELEASE_EVERY seconds. Returns true when it asked.
+function Bridge:releaseMemory()
+    local now = monotonic()
+    if self.closed or (self.released_at and now - self.released_at < Bridge.RELEASE_EVERY) then return false end
+    self.released_at = now
+    for _, slot in pairs(self.slots) do
+        self:_cmd("Memory.simulatePressureNotification", { level = "critical" }, slot.session)
+    end
+    return true
+end
+
+--- Runs the watch now. Returns nothing, or the reason the browser was stopped.
+function Bridge:checkNow()
+    if not self.watch or self.closed then return self.ended end
+    self.next_watch = monotonic() + Bridge.WATCH_EVERY
+    local ok, err = pcall(self.watch, self)
+    if not ok then
+        self.log("watch failed:", tostring(err))
+        return
+    end
+    if err then self:_stop(err) end
+    return self.ended
+end
+
+-- Ends the browser for a reason of the plugin's (it is killed once the bridge is freed).
+function Bridge:_stop(reason)
+    if self.closed then return end
+    self.log("stopping the browser:", reason)
+    self.closed, self.ended = true, reason
+    self:_emit({ ev = "error", slot = 0, msg = reason, fatal = true })
+end
+
 -- Reads what the browser sent within timeout_ms and handles it.
 function Bridge:_pump(timeout_ms)
+    if self.watch and not self.closed and monotonic() >= self.next_watch then
+        if self:checkNow() then return end
+    end
     local cdp = self.cdp
     local got = cdp:_pump(timeout_ms)
     local msgs = cdp.messages
@@ -483,8 +528,8 @@ function Bridge:_pump(timeout_ms)
     for _, m in ipairs(msgs) do self:_handle(m) end
     if got == nil and not self.closed then
         self.closed = true
-        self:_emit({ ev = "error", slot = 0, msg = "the browser ended (" .. tostring(cdp:exitStatus()) .. ")",
-            fatal = true })
+        self.ended = "the browser ended (" .. tostring(cdp:exitStatus()) .. ")"
+        self:_emit({ ev = "error", slot = 0, msg = self.ended, fatal = true })
     end
     for _, slot in pairs(self.slots) do
         local cap = slot.cap

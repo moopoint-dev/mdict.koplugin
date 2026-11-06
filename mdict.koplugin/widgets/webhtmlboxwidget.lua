@@ -237,6 +237,10 @@ function WebHtmlBoxWidget:_timingText(page)
             page.show + page.capture, page.show, page.capture, tostring(page.wait), tostring(page.via),
             tostring(page.draw))
     end
+    -- the Kindle's: how much memory is left
+    local bridge = self.renderer and self.renderer.bridge
+    local note = bridge and bridge.memoryNote and bridge.memoryNote()
+    if note then text = text .. "; memory " .. note end
     return text
 end
 

@@ -173,6 +173,55 @@ describe("DevTools bridge", function()
         b:free()
     end)
 
+    it("runs its watch while waiting, frees memory and stops the browser when the watch says so", function()
+        local cdp = fake_cdp({
+            ["Target.getTargets"] = function() return { targetInfos = { { type = "page", targetId = "T1" } } } end,
+            ["Target.attachToTarget"] = function() return { sessionId = "S1" } end,
+            ["Page.enable"] = function() return {} end,
+            ["Runtime.enable"] = function() return {} end,
+            ["Runtime.addBinding"] = function() return {} end,
+            ["Page.addScriptToEvaluateOnNewDocument"] = function() return {} end,
+            ["Network.enable"] = function() return {} end,
+            ["Network.setRequestInterception"] = function() return {} end,
+            ["Emulation.setDeviceMetricsOverride"] = function() return {} end,
+        })
+        local verdict, runs, b = nil, 0, nil
+        b = assert(Bridge.new({ cdp = cdp, dpr = 2, decode = function() return true end,
+            watch = function(bridge)
+                runs = runs + 1
+                assert.equal(b, bridge)
+                return verdict
+            end }))
+        b:open(1, 1000, 1100)
+        assert.equal('{"ev":"opened","slot":1}', b:poll(0))
+        local function count(method)
+            local n = 0
+            for _, m in ipairs(cdp.sent) do if m.method == method then n = n + 1 end end
+            return n
+        end
+        -- asks the page to free memory, at most once in a while
+        assert.is_true(b:releaseMemory())
+        assert.is_false(b:releaseMemory())
+        assert.equal(1, count("Memory.simulatePressureNotification"))
+        assert.same({ level = "critical" }, cdp.sent[#cdp.sent].params)
+        assert.equal("S1", cdp.sent[#cdp.sent].session)
+        -- once a second while polling, and whenever asked
+        local before = runs
+        assert.is_nil(b:poll(0))
+        assert.is_nil(b:checkNow())
+        assert.equal(before + 1, runs)
+        assert.is_true(b:alive())
+        verdict = "the Kindle is low on memory (20 MB free)"
+        assert.equal(verdict, b:checkNow())
+        assert.is_false(b:alive())
+        assert.equal(verdict, b.ended)
+        local ev = json.decode(b:poll(100))
+        assert.same({ "error", verdict, true }, { ev.ev, ev.msg, ev.fatal })
+        assert.equal(verdict, b:checkNow()) -- and stays stopped
+        b:free()
+        assert.is_true(cdp.closed)
+    end)
+
     it("decodes PNG screenshots", function()
         -- 2x2 RGBA, each row with filter 1 (each byte adds the one a pixel to its left)
         local rgba = "\1" .. "\255\0\0\255" .. "\0\255\0\255" .. "\1" .. "\0\0\255\255" .. "\255\255\255\128"

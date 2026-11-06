@@ -398,9 +398,10 @@ function MDict:displayItems()
                 .. "look as their dictionary intends, with vertical text and the dictionary's scripts. The first "
                 .. "lookup starts the browser, which takes about 20 seconds on a Paperwhite; it then stays open, "
                 .. "also while the Kindle sleeps, and closes after twenty minutes without a lookup. It uses about "
-                .. "70 MB of memory, and starts only when 80 MB are free. When off, or if the browser fails, "
-                .. "KOReader's built-in HTML renderer is used. If the Kindle behaves oddly, turn this off and "
-                .. "restart the Kindle."),
+                .. "70 MB of memory, starts only when 80 MB are free, and is closed if memory runs low later. "
+                .. "When off, or once the browser has failed, KOReader's built-in HTML renderer is used (until "
+                .. "KOReader restarts, or this is turned off and on). If the Kindle behaves oddly, turn this off "
+                .. "and restart the Kindle."),
             checked_func = function() return s.kindle_browser == true end,
             callback = function()
                 s.kindle_browser = not s.kindle_browser or nil

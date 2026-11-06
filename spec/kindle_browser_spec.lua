@@ -21,6 +21,56 @@ describe("Kindle browser", function()
         KB.root = ""
     end)
 
+    it("watches memory: frees the browser's caches when it runs low, and stops it when that is not enough", function()
+        local root = helper.tmpdir("kb-watch")
+        os.execute("mkdir -p '" .. root .. "/proc/321'")
+        write(root .. "/proc/321/status", "Name:\tkindle_browser\nVmRSS:\t   73728 kB\n")
+        local function avail(mb) write(root .. "/proc/meminfo", "MemAvailable:  " .. mb * 1024 .. " kB\n") end
+        KB.root = root
+        local released, logged = 0, {}
+        local bridge = { cdp = { pid = 321 }, log = function(...) logged[#logged + 1] = table.concat({ ... }, " ") end }
+        local can_release = true
+        function bridge.releaseMemory()
+            if not can_release then return false end
+            released = released + 1
+            return true
+        end
+        avail(120)
+        assert.is_nil(KB.watch(bridge))
+        assert.equal(0, released)
+        assert.equal("120 MB free, browser 72 MB", KB.memoryText(321))
+        avail(45) -- low: the browser frees what it can
+        assert.is_nil(KB.watch(bridge))
+        assert.equal(1, released)
+        assert.truthy(logged[1]:find("45 MB free, browser 72 MB", 1, true))
+        can_release = false -- (asked a moment ago)
+        avail(20)
+        assert.equal("the Kindle is low on memory (20 MB free)", KB.watch(bridge))
+        can_release = true -- asked now, and it freed enough
+        local settle = KB.RELEASE_SETTLE
+        KB.RELEASE_SETTLE = 10
+        local reads = 0
+        local availableMemory = KB.availableMemory
+        KB.availableMemory = function()
+            reads = reads + 1
+            return (reads == 1 and 20 or 40) * 1048576
+        end
+        assert.is_nil(KB.watch(bridge))
+        assert.equal(2, released)
+        KB.availableMemory, KB.RELEASE_SETTLE, KB.root = availableMemory, settle, ""
+    end)
+
+    it("finds the kernel's messages about running out of memory", function()
+        local dmesg = KB.DMESG
+        KB.DMESG = "printf '[1] usb ok\\n[2] kindle_browser invoked oom-killer: gfp_mask=0x201da\\n"
+            .. "[3] Out of memory: Kill process 4242 (kindle_browser) score 1000\\n[4] wifi up\\n'"
+        assert.equal("[2] kindle_browser invoked oom-killer: gfp_mask=0x201da | "
+            .. "[3] Out of memory: Kill process 4242 (kindle_browser) score 1000", KB.oomLines())
+        KB.DMESG = "printf '[1] quiet\\n'"
+        assert.is_nil(KB.oomLines())
+        KB.DMESG = dmesg
+    end)
+
     it("ends browsers it started that outlived KOReader, and nothing else", function()
         local dir = helper.tmpdir("kb-orphan")
         local function start(env)
@@ -83,6 +133,7 @@ describe("Kindle browser in the manager", function()
         stub("renderers/kindle_browser", {
             IDLE_CLOSE = 600, MIN_MEMORY = 80 * 1048576,
             killOrphans = function() kb_calls[#kb_calls + 1] = "killOrphans" return 0 end,
+            oomLines = function() return "[3] Out of memory: Kill process 4242 (kindle_browser)" end,
             availableMemory = function() return 150 * 1048576 end,
             bridge = function(opts)
                 kb_calls[#kb_calls + 1] = opts
@@ -155,6 +206,23 @@ describe("Kindle browser in the manager", function()
         assert.is_true(fake_bridge.freed)
         assert.equal(3, #shown)
         assert.truthy(shown[3].text:find("the browser ended", 1, true))
+    end)
+
+    it("stops the browser when memory runs low, and says when the Kindle ran out", function()
+        local state = { settings = { kindle_browser = true } }
+        assert(Manager.get(state))
+        fake_bridge.checkNow = function() return "the Kindle is low on memory (20 MB free)" end
+        assert.is_nil(Manager.get(state))
+        assert.is_true(fake_bridge.freed)
+        assert.truthy(shown[#shown].text:find("(the Kindle is low on memory (20 MB free))", 1, true))
+        -- killed by the kernel, without a word
+        Manager.failed, Manager.notified, fake_bridge.freed = nil, false, false
+        fake_bridge.checkNow = nil
+        assert(Manager.get(state))
+        fake_bridge.dead, fake_bridge.ended = true, "the browser ended (killed by signal 9)"
+        assert.is_nil(Manager.get(state))
+        assert.equal("the browser ended (killed by signal 9)", Manager.failed)
+        assert.truthy(shown[#shown].text:find("(the Kindle ran out of memory)", 1, true))
     end)
 
     it("needs enough free memory", function()

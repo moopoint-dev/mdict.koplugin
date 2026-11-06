@@ -29,6 +29,14 @@ KB.CAST_WAIT, KB.CAPTURE_WAIT = 5, 15 -- seconds for a screencast frame, then fo
 KB.LOAD_TIMEOUT, KB.OP_TIMEOUT = 60, 45 -- seconds
 -- it ignores Browser.close (the test waited 5 s for nothing): it is terminated right away
 KB.CLOSE_GRACE = 0
+-- Memory while the browser runs (checked before each entry, and every second while waiting
+-- for the browser). Below RELEASE_BELOW available, the browser is asked to free its caches;
+-- below STOP_BELOW, once asked, it is stopped. A Paperwhite 4 that ran out froze for half a
+-- minute before the kernel killed the browser.
+KB.RELEASE_BELOW = 50 * 1024 * 1024
+KB.STOP_BELOW = 25 * 1024 * 1024
+KB.RELEASE_SETTLE = 500 -- milliseconds the browser gets to free memory before it is measured again
+KB.DMESG = "dmesg" -- the kernel's log, read after the browser was killed
 
 local function read(path)
     local f = io.open(path, "rb")
@@ -60,6 +68,53 @@ KB.root = "" -- prefix for /proc (the specs point it at a fake one)
 function KB.availableMemory()
     local v = (read(KB.root .. "/proc/meminfo") or ""):match("MemAvailable:%s+(%d+) kB")
     return v and tonumber(v) * 1024
+end
+
+--- The resident memory of process pid (the browser runs as one process), in bytes, or nil.
+function KB.processMemory(pid)
+    local v = (read(KB.root .. "/proc/" .. tostring(pid) .. "/status") or ""):match("VmRSS:%s+(%d+) kB")
+    return v and tonumber(v) * 1024
+end
+
+local function mb(bytes)
+    return bytes and string.format("%d MB", math.floor(bytes / 1048576 + 0.5)) or "?"
+end
+
+--- Memory for the log: "95 MB free, browser 71 MB".
+function KB.memoryText(pid)
+    return mb(KB.availableMemory()) .. " free, browser " .. mb(pid and KB.processMemory(pid))
+end
+
+--- The bridge's watch (see renderers/cdp_bridge.lua): nothing, or why the browser must stop.
+function KB.watch(bridge)
+    local avail = KB.availableMemory()
+    if not avail or avail >= KB.RELEASE_BELOW then return end
+    if bridge:releaseMemory() then
+        bridge.log("low memory, asked the browser to free some:", KB.memoryText(bridge.cdp.pid))
+        if avail < KB.STOP_BELOW then
+            sleep_ms(KB.RELEASE_SETTLE)
+            avail = KB.availableMemory() or avail
+        end
+    end
+    if avail < KB.STOP_BELOW then
+        return "the Kindle is low on memory (" .. mb(avail) .. " free)"
+    end
+end
+
+--- The kernel's last messages about running out of memory, or nil.
+function KB.oomLines()
+    local ok, p = pcall(io.popen, KB.DMESG .. " 2>/dev/null")
+    if not ok or not p then return nil end
+    local lines = {}
+    for line in p:lines() do
+        local l = line:lower()
+        if l:find("out of memory", 1, true) or l:find("killed process", 1, true) or l:find("oom", 1, true) then
+            lines[#lines + 1] = line
+            if #lines > 6 then table.remove(lines, 1) end
+        end
+    end
+    p:close()
+    return #lines > 0 and table.concat(lines, " | ") or nil
 end
 
 --- Ends browsers the plugin started that outlived it (KOReader crashed, or was killed):
@@ -179,7 +234,8 @@ function KB.decode(data, ptr, w, h, extra)
 end
 
 --- Starts the browser as a renderer bridge. opts: shim, screen ({ w, h }), dpr, log(...),
--- config (instead of kindleConfig, for tests), decode (instead of KB.decode).
+-- config (instead of kindleConfig, for tests), decode (instead of KB.decode), watch (instead of
+-- KB.watch; false for none).
 -- Returns the bridge, or nil and an error.
 function KB.bridge(opts)
     local Test = require("mdict/kindletest")
@@ -192,7 +248,10 @@ function KB.bridge(opts)
         if started then KB.stop(started, cfg) else KB.cleanup(cfg) end
         return nil, "the browser did not start: " .. tostring(berr)
     end
-    if opts.log then opts.log("Kindle browser ready after", string.format("%.1f s", info.ready_at), info.version) end
+    if opts.log then
+        opts.log("Kindle browser ready after", string.format("%.1f s", info.ready_at), info.version,
+            "with memory", KB.memoryText(browser.pid))
+    end
     local CdpBridge = require("renderers/cdp_bridge")
     local pid = browser.pid
     local bridge
@@ -208,6 +267,7 @@ function KB.bridge(opts)
         cast_wait = KB.CAST_WAIT, capture_wait = KB.CAPTURE_WAIT,
         load_timeout = KB.LOAD_TIMEOUT, op_timeout = KB.OP_TIMEOUT,
         close_grace = KB.CLOSE_GRACE,
+        watch = opts.watch == nil and KB.watch or opts.watch or nil,
         on_free = function() KB.cleanup(cfg, pid) end,
     })
     if not bridge then
@@ -215,6 +275,7 @@ function KB.bridge(opts)
         return nil, err
     end
     bridge.kindle = { cfg = cfg, info = info }
+    bridge.memoryNote = function() return KB.memoryText(pid) end
     return bridge
 end
 
