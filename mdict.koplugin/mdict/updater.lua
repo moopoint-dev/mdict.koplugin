@@ -149,7 +149,8 @@ function Updater.install(release)
                 os.remove(zip)
                 local err = type(out) == "string" and out:match("^error\n(.*)$") or tostring(out)
                 logger.warn("MDict: update download failed:", err)
-                info(T(_("Could not download the update.\n\n%1"), err))
+                info(T(_("Could not download the update.\n\n%1\n\nYou can also download it from %2 "
+                    .. "and unzip it into KOReader's plugins folder."), err, release.url))
                 return
             end
             local version, err = Update.stage(zip, Updater.pluginDir(), release.version)

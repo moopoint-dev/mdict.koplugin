@@ -134,7 +134,14 @@ local function describe(code, status, headers, block, total)
     end
     local ok, socketutil = pcall(require, "socketutil")
     local text = ok and socketutil.describe_error and socketutil.describe_error(code, block, total)
-    return text or tostring(code or "network error")
+    if text then return text end
+    -- KOReader before 2026.10 has no describe_error
+    if code == "timeout" or code == "wantread" or code == "wantwrite" or code == "sink timeout" then
+        return string.format("The connection timed out (%s).", code)
+    elseif code == "closed" then
+        return "The server closed the connection (closed)."
+    end
+    return tostring(code or "network error")
 end
 
 local function get(url, sink, headers, block, total)
@@ -181,18 +188,31 @@ function M.verifyFile(path, size, sha256)
     return true
 end
 
---- Downloads a release asset to path and checks it.
-function M.download(asset, path)
+-- Downloads are tried a few times, with more time than KOReader gives files (15 s without
+-- data, 60 s in all): from some networks GitHub's downloads are slow and stall now and then.
+M.DOWNLOAD_TRIES = 3
+M.DOWNLOAD_BLOCK_TIMEOUT, M.DOWNLOAD_TOTAL_TIMEOUT = 30, 180
+
+local function download_once(asset, path)
     local socketutil = require("socketutil")
     os.remove(path)
     local f, ferr = io.open(path, "wb")
     if not f then return nil, ferr end
-    local ok, err = get(asset.url, socketutil.file_sink(f), nil,
-        socketutil.FILE_BLOCK_TIMEOUT, socketutil.FILE_TOTAL_TIMEOUT)
+    local ok, err = get(asset.url, socketutil.file_sink(f), nil, M.DOWNLOAD_BLOCK_TIMEOUT, M.DOWNLOAD_TOTAL_TIMEOUT)
     pcall(f.close, f)
     if ok then ok, err = M.verifyFile(path, asset.size, asset.sha256) end
     if not ok then os.remove(path) end
     return ok, err
+end
+
+--- Downloads a release asset to path and checks it (trying again when it fails).
+function M.download(asset, path)
+    local ok, err
+    for _ = 1, M.DOWNLOAD_TRIES do
+        ok, err = download_once(asset, path)
+        if ok then return true end
+    end
+    return nil, err
 end
 
 -- Files -------------------------------------------------------------------------

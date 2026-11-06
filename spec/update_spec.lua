@@ -122,6 +122,38 @@ describe("update releases", function()
         assert.is_nil((Update.verifyFile(p, 6)))
         assert.is_nil((Update.verifyFile(p .. "x", 5)))
     end)
+
+    it("tries a download again when the connection stalls, and says so when it never works", function()
+        local names = { "socket.http", "socket", "socketutil" }
+        local saved = {}
+        for _, n in ipairs(names) do saved[n] = package.loaded[n] end
+        local calls, works_at, timeouts = 0, 3, {}
+        package.loaded["socket"] = { skip = function(n, ...) return select(n + 1, ...) end }
+        package.loaded["socketutil"] = { -- an older KOReader's: no describe_error
+            set_timeout = function(_, b, t) timeouts[#timeouts + 1] = { b, t } return b, t end,
+            reset_timeout = function() end,
+            file_sink = function(f) return function(chunk) if chunk then f:write(chunk) end return 1 end end,
+        }
+        package.loaded["socket.http"] = { request = function(req)
+            calls = calls + 1
+            if calls < works_at then return nil, "wantread" end
+            req.sink("hello")
+            req.sink(nil)
+            return 1, 200, {}, "HTTP/1.1 200 OK"
+        end }
+        local p = helper.tmpdir("update-retry") .. "/p.zip"
+        assert.is_true(Update.download({ url = "https://example.invalid/p.zip", size = 5 }, p))
+        assert.equal(3, calls)
+        assert.same({ Update.DOWNLOAD_BLOCK_TIMEOUT, Update.DOWNLOAD_TOTAL_TIMEOUT }, timeouts[1])
+        assert.is_true(Update.DOWNLOAD_BLOCK_TIMEOUT >= 30)
+        calls, works_at = 0, 99
+        local ok, err = Update.download({ url = "https://example.invalid/p.zip", size = 5 }, p)
+        assert.is_nil(ok)
+        assert.equal(Update.DOWNLOAD_TRIES, calls)
+        assert.equal("The connection timed out (wantread).", err)
+        assert.is_nil(io.open(p))
+        for _, n in ipairs(names) do package.loaded[n] = saved[n] end
+    end)
 end)
 
 describe("update install", function()
