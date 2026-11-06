@@ -673,11 +673,19 @@
     return taken === null ? !notCancelled : taken;
   }
 
+  // Whether each checkbox and radio button is checked. A tap that toggles one changes
+  // nothing the observer sees, yet a :checked rule can open a section.
+  function checkedState(root) {
+    var inputs = root.querySelectorAll('input[type="checkbox"], input[type="radio"]'), s = "";
+    for (var i = 0; i < inputs.length; i++) s += inputs[i].checked ? "1" : "0";
+    return s;
+  }
+
   // Watches the entry for changes. settle() resolves to whether it changed, once
   // the changes stop; elements added meanwhile are pushed to `added`.
   function watch(added) {
     var zoom = el("mdict-zoom");
-    var changed = false, last = Date.now(), start = last;
+    var changed = false, last = Date.now(), start = last, checked = checkedState(zoom);
     var seen = function (records) {
       if (!records.length) return;
       changed = true;
@@ -696,11 +704,11 @@
         // a click usually changes the entry at once; only when it did not, give the
         // entry's scripts a frame (animation frames can take a third of a second on e-readers)
         seen(mo.takeRecords());
-        if (!changed) await withTimeout(frame(), 400);
+        if (!changed && checkedState(zoom) === checked) await withTimeout(frame(), 400);
         while (Date.now() - last < 60 && Date.now() - start < 600) await sleep(20);
         seen(mo.takeRecords());
         mo.disconnect();
-        return changed;
+        return changed || checkedState(zoom) !== checked;
       },
     };
   }

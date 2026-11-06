@@ -1,12 +1,14 @@
 <!-- Pager test entry: sections a tap opens, several pages into the entry.
   node tools/pager-test/run.js --res tools/pager-test --out <dir> --zoom 1.25 \
     --tap-selector '#note .head' tools/pager-test/tap-sections.html
-  (add --cdp to test an older Chromium)
+  (or --tap-selector 'label[for=more]'; add --cdp to test an older Chromium)
   Expected: tap.handled, tap.page = tapPage (the pager stays on the tapped page),
   tap.pages and replayPages one page or more above pages. -->
 <style>
 .head { cursor: pointer; font-weight: bold; }
 #note.closed .body { display: none; }
+#more { display: none; }
+#more:not(:checked) ~ .body { display: none; }
 </style>
 <div class="entry">
 <p>Line 1: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
@@ -65,6 +67,26 @@
 <p>Line 40: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
 <p>Line 41: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
 <p>Line 42: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
+<div class="toggle"><input type="checkbox" id="more"><label class="head" for="more">&#9656; More, opened by a checkbox</label><div class="body">
+<p>Line 200: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
+<p>Line 201: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
+<p>Line 202: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
+<p>Line 203: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
+<p>Line 204: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
+<p>Line 205: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
+<p>Line 206: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
+<p>Line 207: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
+<p>Line 208: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
+<p>Line 209: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
+<p>Line 210: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
+<p>Line 211: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
+</div></div>
+<p>Line 43: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
+<p>Line 44: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
+<p>Line 45: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
+<p>Line 46: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
+<p>Line 47: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
+<p>Line 48: filler text that takes up a few lines of the page, so that the sections below start several pages into the entry.</p>
 </div>
 <script>
 document.querySelector("#note .head").addEventListener("click", function () {
