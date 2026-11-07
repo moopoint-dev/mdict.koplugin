@@ -283,6 +283,8 @@ function WebHtmlBoxWidget:stopWork()
 end
 
 function WebHtmlBoxWidget:free()
+    self:_unscheduleSound()
+    self.sound = nil
     self:stopWork()
     self:_dropPages()
     self.freed = true
@@ -348,11 +350,20 @@ function WebHtmlBoxWidget:_tapEntry(pos, link)
     end
     local res = self.renderer:tap(self.slot, math.floor(pos.x), math.floor(pos.y), link)
     if not (res and res.handled) then return end
+    if res.stop then
+        -- the player drawn playing: its sound stops
+        local bridge = self.renderer.bridge
+        if bridge.stopAudio then bridge:stopAudio() end
+        self:_endSound(true, res.box)
+        return true
+    end
     local sounds = type(res.sounds) == "table" and res.sounds or {}
     if sounds[1] and self.html_link_tapped_callback then
         -- a sound the entry plays (an audio player, or a button whose script plays one): played
         -- as a sound:// link is, from the first of its sources there is
+        local before = self:_audioState()
         self.html_link_tapped_callback({ uri = "mdict-sound://" .. sounds[1], sources = sounds })
+        if res.player then self:_soundStarted(before and before.serial or 0, res.box) end
     end
     if res.same then return true end
     if res.jump then
@@ -377,6 +388,130 @@ function WebHtmlBoxWidget:_tapEntry(pos, link)
         UIManager:setDirty(self.dialog, function() return "partial", self.dimen end)
     end
     return true
+end
+
+-- sounds -------------------------------------------------------------------------
+-- An audio player of the entry plays its sound through KOReader (see Manager.playSound).
+-- Meanwhile the pager draws it playing, with a stop button and the progress, and the page is
+-- drawn again every SOUND_TICK seconds, the screen refreshing the player's box only.
+
+WebHtmlBoxWidget.SOUND_TICK = 1
+-- ticks to wait for a sound to start (it may be downloaded first, or wait for Wi-Fi)
+WebHtmlBoxWidget.SOUND_START_TICKS = 15
+
+function WebHtmlBoxWidget:_audioState()
+    local bridge = self.renderer and self.renderer.bridge
+    if not (bridge and bridge.audioState) then return nil end
+    local ok, st = pcall(bridge.audioState, bridge)
+    return ok and st or nil
+end
+
+-- Whether the popup shows this widget.
+function WebHtmlBoxWidget:_shown()
+    local shw = not self.freed and self.dialog and self.dialog.shw_widget
+    return shw and shw.htmlbox_widget == self or false
+end
+
+-- The pager holds this widget's entry, showing its current page.
+function WebHtmlBoxWidget:_holdsEntry()
+    if not (self.slot and self.slot.owner == self and self.slot.key == self.slot_key) then return false end
+    if not self:_ensure() then return false end
+    if self.slot.page ~= self.page_number - 1 then
+        local r = self.renderer:op(self.slot.id, "showPage", { page = self.page_number - 1 })
+        self.slot.page = r and r.page or nil
+    end
+    return true
+end
+
+-- Draws the shown page again and refreshes box (device pixels in the page), or all of it.
+function WebHtmlBoxWidget:_redrawShown(box)
+    local n = self.page_number
+    if self.page_cache[n] then
+        self.page_cache[n]:free()
+        self.page_cache[n], self.page_stale[n] = nil, nil
+    end
+    self:freeBb()
+    self:_render()
+    local d = self.dimen
+    local region = d
+    if box and d.x and d.y then
+        local pad = 4
+        local x0, y0 = math.max(0, box.x0 - pad), math.max(0, box.y0 - pad)
+        local x1, y1 = math.min(d.w, box.x1 + pad), math.min(d.h, box.y1 + pad)
+        if x1 > x0 and y1 > y0 then region = Geom:new{ x = d.x + x0, y = d.y + y0, w = x1 - x0, h = y1 - y0 } end
+    end
+    UIManager:setDirty(self.dialog, function() return "ui", region end)
+end
+
+function WebHtmlBoxWidget:_soundStarted(after, box)
+    self:_unscheduleSound()
+    self.sound = { after = after, ticks = 0, box = box }
+    -- the player drawn playing at once
+    if self:_shown() then self:_redrawShown(box) end
+    self:_scheduleSound()
+end
+
+function WebHtmlBoxWidget:_scheduleSound()
+    self._sound_tick = function() self:_soundTick() end
+    UIManager:scheduleIn(WebHtmlBoxWidget.SOUND_TICK, self._sound_tick)
+end
+
+function WebHtmlBoxWidget:_unscheduleSound()
+    if self._sound_tick then
+        UIManager:unschedule(self._sound_tick)
+        self._sound_tick = nil
+    end
+end
+
+function WebHtmlBoxWidget:_soundTick()
+    self._sound_tick = nil
+    local s = self.sound
+    if not s or self.freed then return end
+    -- the reader went to another result or closed the popup (which stopped the sound)
+    if not self:_shown() then return self:_endSound(false) end
+    local st = self:_audioState()
+    if st and not s.serial and st.serial > s.after then s.serial = st.serial end
+    s.ticks = s.ticks + 1
+    local on
+    if s.serial then
+        on = st.serial == s.serial and st.status ~= 0
+    else
+        on = s.ticks <= WebHtmlBoxWidget.SOUND_START_TICKS
+    end
+    if not on then return self:_endSound(true, s.box) end
+    if self:_holdsEntry() then
+        local playing = s.serial and st.status == 2
+        local r = self.renderer:op(self.slot.id, "player",
+            { playing = true, pos = playing and st.pos or 0, dur = playing and st.dur or 0 })
+        if r and r.box then s.box = r.box end
+        self:_redrawShown(r and r.box)
+    end
+    self:_scheduleSound()
+end
+
+--- The player is no longer drawn playing (its sound ended or was stopped). Pages captured with
+-- it drawn are dropped; the shown one is drawn again when redraw is true.
+function WebHtmlBoxWidget:_endSound(redraw, box)
+    self:_unscheduleSound()
+    self.sound = nil
+    local holds = self:_holdsEntry()
+    if holds then
+        local r = self.renderer:op(self.slot.id, "player", { playing = false })
+        box = box or (r and r.box)
+    end
+    redraw = redraw and holds and self:_shown()
+    for n, bb in pairs(self.page_cache) do
+        if not (redraw and n == self.page_number) then
+            bb:free()
+            self.page_cache[n], self.page_stale[n] = nil, nil
+        end
+    end
+    self.links_cache = {}
+    if redraw then
+        self:_redrawShown(box)
+    else
+        self:freeBb()
+    end
 end
 
 -- text selection -----------------------------------------------------------------

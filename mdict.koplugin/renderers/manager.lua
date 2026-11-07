@@ -268,6 +268,7 @@ function Manager.playSound(state, dict_title, path, sources)
                 local file = d:resource(p)
                 if file then
                     logger.dbg("MDict: playing", file)
+                    Manager.sound_bridge = bridge
                     bridge:playAudio(file)
                     return true
                 end
@@ -280,6 +281,7 @@ function Manager.playSound(state, dict_title, path, sources)
         local file = d.cache_dir .. "/sounds/" .. d.id .. "/" .. name
         local fs = require("mdict/fs")
         if fs.isFile(file) then
+            Manager.sound_bridge = bridge
             bridge:playAudio(file)
             return true
         end
@@ -287,6 +289,7 @@ function Manager.playSound(state, dict_title, path, sources)
             local ok, err = download(web, file)
             if ok then
                 logger.dbg("MDict: playing", web)
+                Manager.sound_bridge = bridge
                 bridge:playAudio(file)
             else
                 logger.warn("MDict: cannot download", web, err)
@@ -300,6 +303,14 @@ function Manager.playSound(state, dict_title, path, sources)
     end
     if speex then return nil, _("This sound is in the Speex format, which Android cannot play.") end
     return nil, T(_("Sound not found in the dictionary: %1"), missing or path)
+end
+
+--- Stops the sound playSound started, if there may be one (the popup went to another result,
+-- or closed).
+function Manager.stopSound()
+    local bridge = Manager.sound_bridge
+    Manager.sound_bridge = nil
+    if bridge and bridge.stopAudio then pcall(bridge.stopAudio, bridge) end
 end
 
 --- Text KOReader appended to a result's definition (the "(query : word)" footer).

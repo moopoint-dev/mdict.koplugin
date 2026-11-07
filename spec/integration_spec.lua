@@ -135,6 +135,19 @@ describe("integration", function()
         Integration.state.widget = nil
     end)
 
+    it("stops a result's sound when the popup leaves the result or closes", function()
+        local stops = 0
+        Integration.state.stopSound = function() stops = stops + 1 end
+        local results = rd:startSdcv("apples", rd.enabled_dict_names, false)
+        local dql = DictQuickLookup:new({ results = results })
+        local opened = stops
+        dql:changeDictionary(2)
+        assert.equal(opened + 1, stops)
+        dql:onCloseWidget()
+        assert.equal(opened + 2, stops)
+        Integration.state.stopSound = nil
+    end)
+
     it("gives MuPDF the dictionary's CSS for a result the renderer cannot show", function()
         Integration.state.renderer = function() return {} end
         Integration.state.widget = function() return nil end

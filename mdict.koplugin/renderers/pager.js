@@ -587,6 +587,7 @@
       content().style.transform = "none";
       content().style.clipPath = "";
     }
+    drawPlayer();
   }
 
   // Lays the entry out in the requested pagination mode ("auto" tries columns first).
@@ -804,6 +805,45 @@
     };
   }
 
+  // The audio player whose sound KOReader plays, drawn playing over the WebView's own controls
+  // (only a sound the WebView played itself would change those): a stop button and the
+  // progress KOReader reports (see MDict.player). { el, pos, dur } in milliseconds, or null.
+  var playing = null;
+
+  function clock(ms) {
+    var sec = Math.floor((ms || 0) / 1000);
+    return Math.floor(sec / 60) + ":" + ("0" + sec % 60).slice(-2);
+  }
+
+  // Draws the player playing when it is on the page shown (out of the entry, which e-ink mode
+  // and the dictionary's CSS style), and takes the drawing off otherwise.
+  function drawPlayer() {
+    var box = el("mdict-player"), p = playing;
+    var r = p && p.el.isConnected && shown(p.el) ? boxOf(p.el) : null;
+    if (!r || !visible(r)) {
+      if (box) box.style.display = "none";
+      return;
+    }
+    if (!box) {
+      box = document.createElement("mdict-player");
+      box.id = "mdict-player";
+      box.innerHTML = "<mdict-player-stop></mdict-player-stop><mdict-player-time></mdict-player-time>"
+        + "<mdict-player-track><mdict-player-done></mdict-player-done></mdict-player-track>";
+      document.body.appendChild(box);
+    }
+    box.style.cssText = "display: flex !important; left: " + r.left + "px !important; top: " + r.top
+      + "px !important; width: " + r.width + "px !important; height: " + r.height
+      + "px !important; font-size: " + Math.max(8, r.height * 0.36) + "px !important";
+    box.children[1].textContent = clock(p.pos) + " / " + clock(p.dur);
+    box.children[2].firstChild.style.width = (p.dur ? Math.min(100, 100 * p.pos / p.dur) : 0) + "%";
+  }
+
+  // The player's box on the page shown, in device pixels, or null.
+  function playerRect(e) {
+    var r = e && e.isConnected && shown(e) ? boxOf(e) : null;
+    return r && visible(r) ? toDevice(r) : null;
+  }
+
   // Clicks target like a finger would. With guard, the click's default action
   // (following a link) is cancelled after the entry's own listeners ran; returns
   // whether one of them cancelled it, i.e. took the click over.
@@ -962,6 +1002,8 @@
       zoom.innerHTML = opts.html || "";
       if (!HAS_ROUND) unroundStyles(zoom);
       state.overlays = [];
+      playing = null;
+      drawPlayer();
       t.mark("html");
       await runScripts(zoom, opts);
       t.mark("scripts");
@@ -1024,6 +1066,14 @@
     var a = arg(opId), d = state.dpr, x = a.x / d, y = a.y / d;
     var zoom = el("mdict-zoom");
     var hit = document.elementFromPoint(x, y);
+    var drawn = el("mdict-player");
+    if (playing && hit && drawn && drawn.contains(hit)) {
+      // the player drawn playing: the tap stops its sound
+      var was = playerRect(playing.el);
+      playing = null;
+      drawPlayer();
+      return done(opId, { handled: true, same: true, stop: true, box: was });
+    }
     var overlay = openOverlay();
     // Chromium before LayoutNG (the Kindle's 75) can miss a fixed viewer inside the
     // columns when hit testing: a tap within its box is on it
@@ -1035,7 +1085,11 @@
     // an audio player: KOReader plays its sound (its own controls do nothing on a still page)
     var player = !a.link && hit && hit.closest("audio");
     var playerSounds = player ? soundsOf(player) : [];
-    if (playerSounds.length) return done(opId, { handled: true, same: true, sounds: playerSounds });
+    if (playerSounds.length) {
+      playing = { el: player, pos: 0, dur: 0 };
+      drawPlayer();
+      return done(opId, { handled: true, same: true, sounds: playerSounds, player: true, box: playerRect(player) });
+    }
     var inOverlay = !!(hit && overlay && overlay.contains(hit));
     var target;
     if (a.link) target = hit && hit.closest("a[href]");
@@ -1341,6 +1395,21 @@
 
   MDict.pageOfAnchor = function (opId) {
     done(opId, { page: pageOfElement(findAnchor(arg(opId).id)) });
+  };
+
+  // The progress of the sound of the player drawn playing: { playing, pos, dur } (milliseconds).
+  // Not playing takes the drawing off. Returns the player's box on the page shown (device
+  // pixels), the part of the page to show again.
+  MDict.player = function (opId) {
+    var a = arg(opId), box = playerRect(playing && playing.el);
+    if (!a.playing) {
+      playing = null;
+    } else if (playing) {
+      playing.pos = a.pos || 0;
+      if (a.dur) playing.dur = a.dur;
+    }
+    drawPlayer();
+    done(opId, { box: box, playing: !!playing });
   };
 
   MDict.ping = function (opId) { measureViewport(); done(opId, { ok: true, w: state.W, h: state.H, dpr: state.dpr }); };

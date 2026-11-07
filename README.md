@@ -104,6 +104,8 @@ note; a notification says when an index you were waiting for is ready.
 - Tap a speaker icon or an audio player to hear the recording (Android; AAC, MP3,
   Ogg and WAV play, Speex does not). A recording the dictionary only links on the
   web is downloaded when you tap it, once KOReader is online, and kept for the next time.
+  A player shows its progress while it plays, and a tap on it stops it; moving to another
+  result or closing the popup stops the recording too.
 
 ## Settings
 

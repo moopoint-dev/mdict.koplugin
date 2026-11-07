@@ -20,7 +20,7 @@ local clock = require("mdict/clock")
 
 local Integration = {
     installed = false,
-    state = nil, -- { library, settings, renderer (optional), playSound (optional) }
+    state = nil, -- { library, settings, renderer (optional), playSound, stopSound (optional) }
     ifos_injected = false,
 }
 
@@ -332,6 +332,13 @@ function Integration.installWidgetHooks()
         end
     end
 
+    -- a sound played from a result stops when the popup leaves it (or closes, or a lookup
+    -- from it opens another popup)
+    local function stop_sound()
+        local stop = Integration.state.stopSound
+        if stop then pcall(stop) end
+    end
+
     local function web_result(dql)
         local r = dql.results and dql.results[dql.dict_index]
         if not (r and r.mdict and Integration.state.widget) then return nil end
@@ -362,6 +369,7 @@ function Integration.installWidgetHooks()
     end
 
     DictQuickLookup.update = function(dql)
+        stop_sound()
         local r = web_result(dql)
         if r or dql.mdict_widget then
             -- switching to, from or between MDict entries: always build a fresh widget (or
@@ -382,6 +390,7 @@ function Integration.installWidgetHooks()
 
     if orig_init then
         DictQuickLookup.init = function(dql, ...)
+            stop_sound()
             dql.mdict_lookup_started, Integration.lookup_started = Integration.lookup_started, nil
             local a, b = orig_init(dql, ...)
             prefetch(dql)
@@ -404,6 +413,7 @@ function Integration.installWidgetHooks()
     end
 
     DictQuickLookup.onCloseWidget = function(dql, ...)
+        stop_sound()
         local drop = Integration.state.dropPrefetch
         if drop then pcall(drop, dql) end
         if orig_close then return orig_close(dql, ...) end

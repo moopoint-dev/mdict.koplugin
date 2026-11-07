@@ -117,8 +117,8 @@ public final class HtmlRenderer {
         });
     }
 
-    /** 2: playAudio/stopAudio. */
-    public static int version() { return 2; }
+    /** 2: playAudio/stopAudio. 3: audioState. */
+    public static int version() { return 3; }
 
     // ---- events -------------------------------------------------------------
 
@@ -419,12 +419,25 @@ public final class HtmlRenderer {
 
     private MediaPlayer player; // UI thread only
 
+    // What audioState reports on the sound started last: its number, whether it is being
+    // prepared (1), plays (2) or neither (0), and its timing. Set on the UI thread, read on any.
+    private volatile int audioSerial, audioStatus, audioDuration;
+    private volatile long audioStart;
+
     /** Plays an audio file, stopping the one playing. Failures (unsupported formats) are logged. */
     public void playAudio(byte[] path) {
         final String p = str(path);
+        final int serial;
+        synchronized (this) {
+            serial = ++audioSerial;
+            audioStatus = 1;
+            audioDuration = 0;
+        }
         ui.post(new Runnable() {
             @Override public void run() {
                 stopPlayer();
+                audioStatus = 1; // this one, or one that came after it, is being prepared
+                if (serial != audioSerial) return;
                 FileInputStream in = null;
                 try {
                     final MediaPlayer mp = new MediaPlayer();
@@ -439,7 +452,11 @@ public final class HtmlRenderer {
                     mp.setDataSource(in.getFD()); // the player keeps its own descriptor
                     mp.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
                         @Override public void onPrepared(MediaPlayer m) {
-                            if (player == m) m.start();
+                            if (player != m) return;
+                            audioDuration = Math.max(0, m.getDuration());
+                            audioStart = SystemClock.uptimeMillis();
+                            audioStatus = 2;
+                            m.start();
                         }
                     });
                     mp.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
@@ -473,9 +490,24 @@ public final class HtmlRenderer {
         });
     }
 
+    /** The sound started last, as "serial status positionMs durationMs": status 1 while it is
+     *  prepared, 2 while it plays, 0 once it has ended or was stopped (or failed). */
+    public byte[] audioState() {
+        int status = audioStatus;
+        long pos = status == 2 ? SystemClock.uptimeMillis() - audioStart : 0;
+        int dur = audioDuration;
+        if (dur > 0 && pos > dur) pos = dur;
+        try {
+            return (audioSerial + " " + status + " " + pos + " " + dur).getBytes("UTF-8");
+        } catch (Exception e) {
+            return new byte[0];
+        }
+    }
+
     private void stopPlayer() {
         MediaPlayer mp = player;
         player = null;
+        audioStatus = 0;
         if (mp == null) return;
         try { mp.reset(); } catch (Throwable ignored) { }
         mp.release();

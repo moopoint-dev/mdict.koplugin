@@ -25,6 +25,7 @@ local METHODS = {
     closeAll = "()V",
     playAudio = "([B)V",
     stopAudio = "()V",
+    audioState = "()[B",
 }
 
 local function android_module()
@@ -214,6 +215,26 @@ function Bridge:closeAll() self:_void("closeAll", "") end
 function Bridge:playAudio(path) self:_void("playAudio", "b", path) end
 
 function Bridge:stopAudio() self:_void("stopAudio", "") end
+
+--- The sound started last: { serial, status (0 ended or stopped, 1 being prepared, 2 playing),
+-- pos and dur in milliseconds }.
+function Bridge:audioState()
+    local text = self:_with(function(jni)
+        local env = jni.env
+        local E = env[0]
+        local arr = E.CallObjectMethodA(env, self.object, self.mid.audioState, ffi.new("jvalue[1]"))
+        check(env, "audioState")
+        if arr == nil then return "" end
+        local len = E.GetArrayLength(env, arr)
+        local buf = ffi.new("uint8_t[?]", math.max(len, 1))
+        E.GetByteArrayRegion(env, arr, 0, len, ffi.cast("jbyte*", buf))
+        E.DeleteLocalRef(env, arr)
+        return ffi.string(buf, len)
+    end) or ""
+    local serial, status, pos, dur = text:match("^(%d+) (%d+) (%d+) (%d+)$")
+    if not serial then return nil end
+    return { serial = tonumber(serial), status = tonumber(status), pos = tonumber(pos), dur = tonumber(dur) }
+end
 
 function Bridge:drain() self:_void("drain", "") end
 
