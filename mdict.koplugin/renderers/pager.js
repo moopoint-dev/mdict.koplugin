@@ -55,6 +55,85 @@
     return Promise.race([promise, sleep(ms)]);
   }
 
+  // CSS round() came with Chromium 125. Before it a declaration that uses it is dropped, and a
+  // registered custom property that holds one takes its initial value: a dictionary that sets
+  // line-height: var(--line) with --line: round(nearest, 1.5em, 1px), registered with 0px, had
+  // every line of an entry drawn over the one before in WebView 109. Such a WebView gets the
+  // stylesheets that use it (marked data-mdict-round by Document.build) and the entry's own
+  // styles rewritten, with each value unrounded: round(<strategy>?, A, <step>?) becomes calc(A),
+  // at most half a step off.
+  var HAS_ROUND = !!(window.CSS && CSS.supports && CSS.supports("width", "round(nearest, 1px, 1px)"));
+  var ROUND_STRATEGIES = { nearest: 1, up: 1, down: 1, "to-zero": 1 };
+
+  function unround(css) {
+    var re = /(^|[^\w-])round\(/gi, out = "", from = 0, m;
+    while ((m = re.exec(css))) {
+      var at = m.index + m[1].length, open = at + 5;
+      var depth = 0, args = [], start = open + 1, end = -1, quote = null;
+      for (var i = open; i < css.length; i++) {
+        var c = css[i];
+        if (quote) {
+          if (c === "\\") i++;
+          else if (c === quote) quote = null;
+        } else if (c === '"' || c === "'") {
+          quote = c;
+        } else if (c === "(") {
+          depth++;
+        } else if (c === ")") {
+          if (--depth === 0) { end = i; break; }
+        } else if (c === "," && depth === 1) {
+          args.push(css.slice(start, i));
+          start = i + 1;
+        }
+      }
+      if (end < 0) break; // not closed: the rest stays as it is
+      args.push(css.slice(start, end));
+      var value = args.length > 1 && ROUND_STRATEGIES[args[0].trim().toLowerCase()] ? args[1] : args[0];
+      out += css.slice(from, at) + "calc(" + unround(value) + ")";
+      from = re.lastIndex = end + 1;
+    }
+    return out + css.slice(from);
+  }
+
+  // A stylesheet's references made absolute: its text moves from its own URL into the page.
+  function absoluteRefs(css, base) {
+    function abs(ref) {
+      if (!ref || /^([a-z][\w+.-]*:|#|\/\/)/i.test(ref)) return ref;
+      try { return new URL(ref, base).href; } catch (e) { return ref; }
+    }
+    css = css.replace(/url\(\s*(['"]?)([^'")]*)\1\s*\)/gi, function (all, q, ref) {
+      return "url(" + q + abs(ref.trim()) + q + ")";
+    });
+    return css.replace(/@import\s+(['"])([^'"]*)\1/gi, function (all, q, ref) { return "@import " + q + abs(ref) + q; });
+  }
+
+  // Each marked stylesheet, rewritten, in place of its <link> (once per document; started as
+  // the document loads). Resolves when they are all in.
+  var unroundedSheets = null;
+  function unroundSheets() {
+    if (unroundedSheets) return unroundedSheets;
+    var links = HAS_ROUND ? [] : Array.prototype.slice.call(document.querySelectorAll("link[data-mdict-round]"));
+    unroundedSheets = Promise.all(links.map(function (link) {
+      return fetch(link.href).then(function (r) { return r.ok ? r.text() : null; }).then(function (text) {
+        if (text === null || !link.parentNode) return;
+        var style = document.createElement("style");
+        style.textContent = absoluteRefs(unround(text), link.href);
+        link.parentNode.replaceChild(style, link);
+      }).catch(function () { /* the sheet stays as it was */ });
+    }));
+    return unroundedSheets;
+  }
+
+  // The entry's <style> elements and style attributes.
+  function unroundStyles(root) {
+    var styles = root.getElementsByTagName("style");
+    for (var i = 0; i < styles.length; i++) {
+      if (/round\(/i.test(styles[i].textContent)) styles[i].textContent = unround(styles[i].textContent);
+    }
+    var styled = root.querySelectorAll('[style*="round(" i]');
+    for (var j = 0; j < styled.length; j++) styled[j].setAttribute("style", unround(styled[j].getAttribute("style")));
+  }
+
   function measureViewport() {
     state.W = window.innerWidth;
     // a bridge can keep a strip below the pages for itself (KOBridge.reserve CSS pixels)
@@ -823,6 +902,10 @@
     try { opts = arg(opId); } catch (e) { return fail(opId, e); }
     (async function () {
       var t = timer();
+      if (!HAS_ROUND) {
+        await withTimeout(unroundSheets(), 3000);
+        t.mark("unround");
+      }
       measureViewport();
       var body = document.body;
       var zoom = el("mdict-zoom");
@@ -836,6 +919,7 @@
       state.rectScale = boxesZoomed() ? (opts.zoom || 1) : 1;
       document.documentElement.style.setProperty("--mdict-gutter", GUTTER * (opts.zoom || 1) + "px");
       zoom.innerHTML = opts.html || "";
+      if (!HAS_ROUND) unroundStyles(zoom);
       state.overlays = [];
       t.mark("html");
       await runScripts(zoom, opts);
@@ -1211,6 +1295,7 @@
 
   window.MDict = MDict;
   measureViewport();
+  unroundSheets();
   // Focus and hash changes could scroll the pager; pages are placed by transform only.
   document.addEventListener("scroll", function (e) {
     var t = e.target === document ? document.scrollingElement : e.target;

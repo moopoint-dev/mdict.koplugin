@@ -27,6 +27,17 @@ describe("document", function()
         assert.truthy(a:find("style.css", 1, true) < a:find("mdict-pager-css", 1, true))
     end)
 
+    it("marks the stylesheets that use round() for the pager to rewrite", function()
+        assert.is_true(Document.usesRound(".a{--line:round(nearest, 1.5em, 1px)}"))
+        assert.is_true(Document.usesRound(".a{line-height:calc(ROUND(up,1em,1px) + 2px)}"))
+        assert.is_false(Document.usesRound(".around(x){} .a{--x-round(1px)} .b{line-height:1.5}"))
+        local a, ka = Document.build({ stylesheets = { "a.css", "b.css" }, round_sheets = { ["b.css"] = true } })
+        local _, kb = Document.build({ stylesheets = { "a.css", "b.css" } })
+        assert.truthy(a:find('<link rel="stylesheet" href="a.css">', 1, true))
+        assert.truthy(a:find('<link rel="stylesheet" href="b.css" data-mdict-round>', 1, true))
+        assert.are_not.equal(ka, kb)
+    end)
+
     it("finds the font families a stylesheet uses", function()
         local fam = Document.cssFamilies([[
             /* font-family: "Commented Out"; */

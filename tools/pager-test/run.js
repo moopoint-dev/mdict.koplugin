@@ -94,7 +94,8 @@ const types = { css: "text/css", js: "text/javascript", png: "image/png", jpg: "
   for (const entry of opts.entries) {
     const args = [path.join(root, "tools/pager-test/prepare.lua"), entry];
     for (const f of opts.fonts) args.push("--font", f);
-    if (opts.userFont) args.push("--user-font", opts.userFont, "--res", opts.res);
+    if (opts.userFont) args.push("--user-font", opts.userFont);
+    if (opts.res) args.push("--res", opts.res);
     prep = JSON.parse(execFileSync("luajit", args, { maxBuffer: 1 << 28 }).toString());
     let page;
     if (opts.cdp) {

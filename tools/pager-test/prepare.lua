@@ -44,19 +44,21 @@ local stylesheets
 html, stylesheets = Html.extractStylesheets(html)
 for k, href in ipairs(stylesheets) do stylesheets[k] = Html.resourcePath(href, "") end
 html = Html.rewriteLinks(html)
-local families
-if user_font and res then
+local families, round_sheets = nil, {}
+if res then
     for _, href in ipairs(stylesheets) do
         local cf = io.open(res .. "/" .. href, "rb")
         if cf then
-            families = Document.cssFamilies(cf:read("*a"), families)
+            local css = cf:read("*a")
             cf:close()
+            if user_font then families = Document.cssFamilies(css, families) end
+            if Document.usesRound(css) then round_sheets[href] = true end
         end
     end
 end
 local doc, _, files = Document.build({
-    stylesheets = stylesheets, fonts = fonts, user_css = user_css, user_font = user_font, css_families = families,
-    plugin_dir = here .. "/mdict.koplugin",
+    stylesheets = stylesheets, round_sheets = round_sheets, fonts = fonts, user_css = user_css,
+    user_font = user_font, css_families = families, plugin_dir = here .. "/mdict.koplugin",
 })
 
 local function json_string(s)

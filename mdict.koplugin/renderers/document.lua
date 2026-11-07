@@ -278,6 +278,12 @@ function Document.userFontCss(user_font, families, aliases, file_url)
     return table.concat(out, "\n"), 'body{font-family:"MDict User",serif}'
 end
 
+--- Whether CSS uses round(), which WebViews before Chromium 125 lack: the pager rewrites such
+-- stylesheets for them (see unround in pager.js).
+function Document.usesRound(css)
+    return css:find("%f[%w_%-][Rr][Oo][Uu][Nn][Dd]%(") ~= nil
+end
+
 local function html_attr(s)
     return (s:gsub("&", "&amp;"):gsub('"', "&quot;"):gsub("<", "&lt;"))
 end
@@ -299,6 +305,7 @@ end
 --- Builds the document.
 -- opts:
 --   stylesheets: resource paths of the dictionary's stylesheets, relative to the dictionary root
+--   round_sheets: { [path] = true } for those of them that use round() (see usesRound)
 --   fonts: per-kind font settings (see fontAliasCss)
 --   font_aliases: replaces Document.FONT_ALIASES (false disables aliasing)
 --   user_css: extra CSS applied after the dictionary's own (e.g. <name>.koreader.css)
@@ -343,8 +350,10 @@ function Document.build(opts)
         '<meta name="color-scheme" content="light only">',
         "<style id=\"mdict-fonts\">\n", alias_css, "\n</style>",
     }
+    local round_sheets = opts.round_sheets or {}
     for _, href in ipairs(opts.stylesheets or {}) do
-        parts[#parts + 1] = '<link rel="stylesheet" href="' .. html_attr(href) .. '">'
+        parts[#parts + 1] = '<link rel="stylesheet" href="' .. html_attr(href) .. '"'
+            .. (round_sheets[href] and " data-mdict-round" or "") .. ">"
     end
     if user_font_css ~= "" then
         parts[#parts + 1] = "<style id=\"mdict-user-font\">\n" .. user_font_css .. "\n</style>"
@@ -361,7 +370,9 @@ function Document.build(opts)
         .. '<mdict-zoom id="mdict-zoom"></mdict-zoom></mdict-content></mdict-pager></body></html>'
     local html = table.concat(parts)
     local key_parts = { tostring(#html), opts.lang or "" }
-    for _, href in ipairs(opts.stylesheets or {}) do key_parts[#key_parts + 1] = href end
+    for _, href in ipairs(opts.stylesheets or {}) do
+        key_parts[#key_parts + 1] = href .. (round_sheets[href] and "\0round" or "")
+    end
     key_parts[#key_parts + 1] = alias_css
     key_parts[#key_parts + 1] = user_font_css
     key_parts[#key_parts + 1] = opts.user_css or ""

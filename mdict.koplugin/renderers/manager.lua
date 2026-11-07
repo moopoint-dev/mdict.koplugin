@@ -280,6 +280,26 @@ function Manager.cssFamilies(d, stylesheets)
     return families or nil
 end
 
+--- Those of a dictionary's stylesheets that use CSS round() (see Document.usesRound), as
+-- { [path] = true }. Each is read once per dictionary.
+function Manager.roundSheets(d, stylesheets)
+    local Document = require("renderers/document")
+    local fs = require("mdict/fs")
+    d._round_sheets = d._round_sheets or {}
+    local out = {}
+    for _, p in ipairs(stylesheets) do
+        local uses = d._round_sheets[p]
+        if uses == nil then
+            local file = d:resource(p)
+            local css = file and fs.readAll(file)
+            uses = css and Document.usesRound(css) or false
+            d._round_sheets[p] = uses
+        end
+        if uses then out[p] = true end
+    end
+    return out
+end
+
 --- A dictionary's own setting, else the global one, else the default.
 function Manager.dictSetting(settings, dict_id, key, default)
     local own = settings.dicts and settings.dicts[dict_id]
@@ -345,6 +365,7 @@ function Manager.widget(state, dql, r, opts)
             dict_id = d.id,
             cache_root = d.res_dir,
             stylesheets = stylesheets,
+            round_sheets = Manager.roundSheets(d, stylesheets),
             fonts = settings.fonts,
             user_font = user_font,
             css_families = user_font and Manager.cssFamilies(d, stylesheets) or nil,
