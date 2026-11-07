@@ -763,6 +763,47 @@
     return e || null;
   }
 
+  // Sounds. The WebView plays none (it is off screen, and play() needs a user gesture): a tap
+  // on an audio player, or one whose script plays a sound, hands the sound's sources to
+  // KOReader, which plays them as it plays sound:// links.
+
+  // A source of a sound: a path in the dictionary (from its root, still %-encoded), an http(s)
+  // URL elsewhere (some dictionaries have their sounds on the web), or null.
+  function soundRef(ref) {
+    ref = (ref || "").trim();
+    if (!ref) return null;
+    var m = /^sound:\/\/(.+)$/i.exec(ref);
+    if (m) return m[1];
+    var u;
+    try { u = new URL(ref, document.baseURI); } catch (e) { return null; }
+    if (u.origin === location.origin) return u.pathname.replace(/^\/+/, "") || null;
+    return /^https?:$/.test(u.protocol) ? u.href : null;
+  }
+
+  // The sources of what a media element plays, in order: its src, then its <source>s.
+  function soundsOf(media) {
+    var refs = [media.getAttribute("src")], out = [];
+    var sources = media.getElementsByTagName("source");
+    for (var i = 0; i < sources.length; i++) refs.push(sources[i].getAttribute("src"));
+    for (var j = 0; j < refs.length; j++) {
+      var r = soundRef(refs[j]);
+      if (r && out.indexOf(r) < 0) out.push(r);
+    }
+    return out;
+  }
+
+  // While a tap runs, what the entry's scripts play is noted here instead of played.
+  var played = null;
+  if (window.HTMLMediaElement) {
+    var play = HTMLMediaElement.prototype.play;
+    HTMLMediaElement.prototype.play = function () {
+      var list = played ? soundsOf(this) : [];
+      if (!list.length) return play.apply(this, arguments);
+      played.push(list);
+      return Promise.resolve();
+    };
+  }
+
   // Clicks target like a finger would. With guard, the click's default action
   // (following a link) is cancelled after the entry's own listeners ran; returns
   // whether one of them cancelled it, i.e. took the click over.
@@ -991,6 +1032,10 @@
       if (x >= o.left && x < o.right && y >= o.top && y < o.bottom) hit = hitInside(overlay, x, y);
     }
     if (hit && !zoom.contains(hit)) hit = null;
+    // an audio player: KOReader plays its sound (its own controls do nothing on a still page)
+    var player = !a.link && hit && hit.closest("audio");
+    var playerSounds = player ? soundsOf(player) : [];
+    if (playerSounds.length) return done(opId, { handled: true, same: true, sounds: playerSounds });
     var inOverlay = !!(hit && overlay && overlay.contains(hit));
     var target;
     if (a.link) target = hit && hit.closest("a[href]");
@@ -1010,20 +1055,27 @@
       var t = timer(), added = [];
       var w = watch(added);
       var tapJump = jump = {};
+      var sounds = played = [];
+      // a sound a script of the entry played goes with the result
+      var reply = function (res) {
+        if (sounds.length) res.sounds = sounds[0];
+        done(opId, res);
+      };
       var taken;
       try {
         taken = activate(target, x, y, !!a.link);
       } catch (e) {
-        jump = null;
+        jump = played = null;
         throw e;
       }
       if (a.link && !taken && !tapJump.target) {
-        jump = null;
+        jump = played = null;
         w.cancel();
         return done(opId, { handled: false });
       }
       var changed = await w.settle();
       if (jump === tapJump) jump = null;
+      if (played === sounds) played = null;
       t.mark("watch");
       // pages are still images: no focus rings on what a script focused
       var focused = document.activeElement;
@@ -1032,17 +1084,17 @@
       if (!changed && to && !inOverlay) {
         // a button that jumps to a section: the same pages, another one shown
         var jp = pageOfElement(to);
-        if (jp >= 0) return done(opId, { handled: true, jump: true, page: jp, pages: state.pages, ms: t.done() });
+        if (jp >= 0) return reply({ handled: true, jump: true, page: jp, pages: state.pages, ms: t.done() });
       }
       if (!changed) {
-        return done(opId, inOverlay || a.link ? { handled: true, same: true } : { handled: false });
+        return reply(inOverlay || a.link || sounds.length ? { handled: true, same: true } : { handled: false });
       }
       markOverlays(added);
       if (openOverlay()) {
         // the entry under a viewer has not moved: keep its pages
         state.page = shownPage;
         present();
-        return done(opId, { handled: true, pages: state.pages, page: state.page, mode: state.mode, ms: t.done() });
+        return reply({ handled: true, pages: state.pages, page: state.page, mode: state.mode, ms: t.done() });
       }
       await settleLayout({ imageTimeout: 1000 }, t);
       var p = to && to.isConnected ? pageOfElement(to) : -1;
@@ -1053,7 +1105,7 @@
       t.mark("page");
       var res = { handled: true, pages: state.pages, page: state.page, mode: state.mode, ms: t.done() };
       if (path) res.path = path;
-      done(opId, res);
+      reply(res);
     })().catch(function (e) { fail(opId, e); });
   };
 

@@ -219,25 +219,87 @@ local function audio_bridge(state)
     return Manager.audio_bridge
 end
 
---- Plays a sound from a dictionary (the part after mdict-sound://, as in the entry). Returns true,
--- or nil and a message.
-function Manager.playSound(state, dict_title, path)
+-- Sounds a dictionary has on the web (see playSound) are downloaded once, into the cache.
+Manager.SOUND_BLOCK_TIMEOUT, Manager.SOUND_TOTAL_TIMEOUT = 10, 30
+
+local function download(url, path)
+    local http = require("socket.http")
+    local socket = require("socket")
+    local socketutil = require("socketutil")
+    local fs = require("mdict/fs")
+    fs.mkdirp(fs.dirname(path))
+    local part = path .. ".part"
+    local f, ferr = io.open(part, "wb")
+    if not f then return nil, ferr end
+    socketutil:set_timeout(Manager.SOUND_BLOCK_TIMEOUT, Manager.SOUND_TOTAL_TIMEOUT)
+    local ok, code = pcall(function()
+        return socket.skip(1, http.request{ url = url, method = "GET", sink = socketutil.file_sink(f) })
+    end)
+    socketutil:reset_timeout()
+    pcall(f.close, f)
+    local size = fs.stat(part)
+    if ok and code == 200 and size and size > 0 and os.rename(part, path) then return true end
+    os.remove(part)
+    if not ok then return nil, tostring(code) end
+    return nil, type(code) == "number" and ("HTTP " .. code) or tostring(code or "network error")
+end
+
+--- Plays a sound from a dictionary: path is the part after mdict-sound://, as in the entry;
+-- sources, when given, are all the sources the entry gives the sound, in order (paths in the
+-- dictionary, http(s) URLs). The first one in the dictionary plays; else the first on the web,
+-- downloaded when KOReader is online. Returns true, or nil and a message.
+function Manager.playSound(state, dict_title, path, sources)
     local _ = require("gettext")
     local T = require("ffi/util").template
+    local Html = require("mdict/html")
     local d = state.library and state.library:byTitle(dict_title)
     if not d then return nil end
-    path = require("mdict/html").resourcePath(path, "")
-    local ext = (path:match("%.(%w+)$") or ""):lower()
-    if ext == "spx" then
-        return nil, _("This sound is in the Speex format, which Android cannot play.")
-    end
     local bridge = audio_bridge(state)
     if not bridge then return nil, _("Dictionary sounds can only be played on Android.") end
-    local file = d:resource(path)
-    if not file then return nil, T(_("Sound not found in the dictionary: %1"), path) end
-    logger.dbg("MDict: playing", file)
-    bridge:playAudio(file)
-    return true
+    local missing, speex, web
+    for _, src in ipairs(sources or { path }) do
+        if src:find("^[Hh][Tt][Tt][Pp][Ss]?://") then
+            web = web or src
+        else
+            local p = Html.resourcePath(src, "")
+            if (p:match("%.(%w+)$") or ""):lower() == "spx" then
+                speex = true
+            else
+                local file = d:resource(p)
+                if file then
+                    logger.dbg("MDict: playing", file)
+                    bridge:playAudio(file)
+                    return true
+                end
+                missing = missing or p
+            end
+        end
+    end
+    if web then
+        local name = web:gsub("^%a+://", ""):gsub("[?#].*$", ""):gsub("[^%w%.%-]", "_"):sub(-120)
+        local file = d.cache_dir .. "/sounds/" .. d.id .. "/" .. name
+        local fs = require("mdict/fs")
+        if fs.isFile(file) then
+            bridge:playAudio(file)
+            return true
+        end
+        require("ui/network/manager"):runWhenOnline(function()
+            local ok, err = download(web, file)
+            if ok then
+                logger.dbg("MDict: playing", web)
+                bridge:playAudio(file)
+            else
+                logger.warn("MDict: cannot download", web, err)
+                local Notification = require("ui/widget/notification")
+                require("ui/uimanager"):show(Notification:new{
+                    text = T(_("Could not download the sound: %1"), err),
+                })
+            end
+        end)
+        return true
+    end
+    if speex then return nil, _("This sound is in the Speex format, which Android cannot play.") end
+    return nil, T(_("Sound not found in the dictionary: %1"), missing or path)
 end
 
 --- Text KOReader appended to a result's definition (the "(query : word)" footer).

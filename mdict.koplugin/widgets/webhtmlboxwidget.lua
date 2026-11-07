@@ -348,6 +348,12 @@ function WebHtmlBoxWidget:_tapEntry(pos, link)
     end
     local res = self.renderer:tap(self.slot, math.floor(pos.x), math.floor(pos.y), link)
     if not (res and res.handled) then return end
+    local sounds = type(res.sounds) == "table" and res.sounds or {}
+    if sounds[1] and self.html_link_tapped_callback then
+        -- a sound the entry plays (an audio player, or a button whose script plays one): played
+        -- as a sound:// link is, from the first of its sources there is
+        self.html_link_tapped_callback({ uri = "mdict-sound://" .. sounds[1], sources = sounds })
+    end
     if res.same then return true end
     if res.jump then
         -- a script jumped to another part of the entry: the pages stay as they are

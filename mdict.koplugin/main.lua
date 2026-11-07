@@ -102,8 +102,8 @@ function MDict:init()
     state.prefetch = function(dql) return Manager.prefetch(state, dql) end
     state.dropPrefetch = function(dql) return Manager.dropPrefetch(dql) end
     state.keep = function(dql, w, r) return Manager.keep(state, dql, w, r) end
-    state.playSound = function(dictionary, path)
-        local ok, msg = Manager.playSound(state, dictionary, path)
+    state.playSound = function(dictionary, path, sources)
+        local ok, msg = Manager.playSound(state, dictionary, path, sources)
         if not ok and msg then
             local Notification = require("ui/widget/notification")
             UIManager:show(Notification:new{ text = msg })

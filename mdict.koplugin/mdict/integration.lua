@@ -288,7 +288,7 @@ function Integration.install(state)
             if uri:sub(1, 1) == "#" or uri:find("^bword://#") then return end
             local sound = uri:match("^mdict%-sound://(.*)$")
             if sound then
-                if Integration.state.playSound then Integration.state.playSound(dictionary, sound) end
+                if Integration.state.playSound then Integration.state.playSound(dictionary, sound, link.sources) end
                 return
             end
             local prefix, word = uri:match("^(bword://)(.*)$")

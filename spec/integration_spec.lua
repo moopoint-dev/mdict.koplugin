@@ -93,11 +93,15 @@ describe("integration", function()
 
     it("handles MDict link schemes", function()
         local played
-        Integration.state.playSound = function(dict, path) played = { dict, path } end
+        Integration.state.playSound = function(dict, path, sources) played = { dict, path, sources } end
         rd.shown = nil
         rd:onHtmlDictionaryLinkTapped("Basic Test", { uri = "mdict-sound://audio/x.mp3" })
         assert.same({ "Basic Test", "audio/x.mp3" }, played)
         assert.is_nil(rd.shown)
+        -- an audio player's sources (see WebHtmlBoxWidget:_tapEntry)
+        rd:onHtmlDictionaryLinkTapped("Basic Test",
+            { uri = "mdict-sound://a.mp3", sources = { "a.mp3", "https://example.org/a.mp3" } })
+        assert.same({ "Basic Test", "a.mp3", { "a.mp3", "https://example.org/a.mp3" } }, played)
         rd:onHtmlDictionaryLinkTapped("Basic Test", { uri = "#sense2" })
         assert.is_nil(rd.shown)
         rd:onHtmlDictionaryLinkTapped("Basic Test", { uri = "bword://apples", text = "apples!" })
