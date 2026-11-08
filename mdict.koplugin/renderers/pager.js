@@ -134,6 +134,135 @@
     for (var j = 0; j < styled.length; j++) styled[j].setAttribute("style", unround(styled[j].getAttribute("style")));
   }
 
+  // The reader's font ("My font"). Its faces stand in for the families the dictionary's
+  // stylesheets name (the @font-face rules of #mdict-user-font, see Document.userFontCss), which
+  // misses text in generic families (serif, sans-serif, system-ui, ui-serif) and in families
+  // only the entry's own styles name: such a family list gets "MDict User" put in front, so the
+  // characters the reader's font is for take it and the others keep the dictionary's fonts.
+  // ui-serif, ui-sans-serif, ui-monospace and ui-rounded (dictionaries made from macOS ones use
+  // them) are unknown to Chromium, which draws their text in the default font, sans-serif on
+  // Android: they get the generic family they stand for after them, with or without the
+  // reader's font.
+  var USER_FAMILY = "MDict User";
+  var UI_GENERICS = { "ui-serif": "serif", "ui-sans-serif": "sans-serif", "ui-monospace": "monospace",
+                      "ui-rounded": "sans-serif" };
+  // pager stylesheets, which name no dictionary fonts
+  var OWN_SHEETS = { "mdict-fonts": 1, "mdict-user-font": 1, "mdict-pager-css": 1 };
+  var userFamilies; // lower-case names of the families with the reader's font; null: no reader's font
+  var fontSheetsDone = typeof WeakSet === "function" ? new WeakSet() : null;
+
+  function rulesOf(sheet) {
+    try { return sheet.cssRules; } catch (e) { return null; } // another origin's sheet
+  }
+
+  // A family list split into its families, each as written (quoted or not).
+  function familyItems(value) {
+    var out = [], cur = "", quote = null;
+    for (var i = 0; i < value.length; i++) {
+      var c = value[i];
+      if (quote) {
+        if (c === "\\") { cur += c + (value[++i] || ""); continue; }
+        if (c === quote) quote = null;
+      } else if (c === '"' || c === "'") {
+        quote = c;
+      } else if (c === ",") {
+        out.push(cur.trim());
+        cur = "";
+        continue;
+      }
+      cur += c;
+    }
+    out.push(cur.trim());
+    return out;
+  }
+
+  function familyName(item) {
+    var q = item.charAt(0);
+    if ((q === '"' || q === "'") && item.length > 1 && item.charAt(item.length - 1) === q) {
+      return item.slice(1, -1).replace(/\\(.)/g, "$1").toLowerCase();
+    }
+    return item.replace(/\s+/g, " ").toLowerCase();
+  }
+
+  function readUserFamilies() {
+    if (userFamilies !== undefined) return userFamilies;
+    userFamilies = null;
+    var style = el("mdict-user-font");
+    var rules = style && style.sheet && rulesOf(style.sheet);
+    if (!rules) return null;
+    userFamilies = {};
+    for (var i = 0; i < rules.length; i++) {
+      var f = rules[i].style && rules[i].style.getPropertyValue("font-family");
+      if (f) userFamilies[familyName(f.trim())] = true;
+    }
+    return userFamilies;
+  }
+
+  // The family list a font-family value should have, or null to keep it.
+  function fixedFamilies(value) {
+    if (!value || /\b(var|env|attr)\(/i.test(value) || /^\s*(inherit|initial|unset|revert|revert-layer)\s*$/i.test(value)) {
+      return null;
+    }
+    var items = familyItems(value), changed = false;
+    if (!items[0]) return null;
+    for (var i = 0; i < items.length; i++) {
+      var generic = UI_GENERICS[items[i].toLowerCase()];
+      if (generic && items.indexOf(generic) < 0) {
+        items.splice(i + 1, 0, generic);
+        changed = true;
+      }
+    }
+    var user = readUserFamilies();
+    var first = familyName(items[0]);
+    if (user && first !== USER_FAMILY.toLowerCase() && !user[first]) {
+      items.unshift('"' + USER_FAMILY + '"');
+      changed = true;
+    }
+    return changed ? items.join(", ") : null;
+  }
+
+  function fixFontFamily(style) {
+    var value = style.getPropertyValue("font-family");
+    var fixed = value && fixedFamilies(value);
+    if (fixed) style.setProperty("font-family", fixed, style.getPropertyPriority("font-family"));
+  }
+
+  function fixFontRules(rules, depth) {
+    for (var i = 0; i < rules.length; i++) {
+      var r = rules[i];
+      if (r.type === 1) fixFontFamily(r.style); // a style rule (not @font-face or a keyframe)
+      if (r.type === 3 && r.styleSheet && depth < 4) fixFontSheet(r.styleSheet, depth + 1); // @import
+      if (r.type !== 7 && r.cssRules) fixFontRules(r.cssRules, depth); // @media, @supports, nesting
+    }
+  }
+
+  function fixFontSheet(sheet, depth) {
+    if (fontSheetsDone) {
+      if (fontSheetsDone.has(sheet)) return;
+      fontSheetsDone.add(sheet);
+    }
+    var rules = rulesOf(sheet);
+    if (rules) fixFontRules(rules, depth);
+  }
+
+  // The stylesheets of the page and of the entry (each once), and the entry's style attributes
+  // and <font face>.
+  function fixFonts(root) {
+    var sheets = document.styleSheets;
+    for (var i = 0; i < sheets.length; i++) {
+      var owner = sheets[i].ownerNode;
+      if (!(owner && OWN_SHEETS[owner.id] === 1)) fixFontSheet(sheets[i], 0);
+    }
+    var styled = root.querySelectorAll("[style]");
+    for (var j = 0; j < styled.length; j++) fixFontFamily(styled[j].style);
+    var fonts = root.querySelectorAll("font[face]");
+    for (var k = 0; k < fonts.length; k++) {
+      var face = fonts[k].getAttribute("face");
+      var fixed = !fonts[k].style.fontFamily && fixedFamilies(face);
+      if (fixed) fonts[k].style.fontFamily = fixed;
+    }
+  }
+
   function measureViewport() {
     state.W = window.innerWidth;
     // a bridge can keep a strip below the pages for itself (KOBridge.reserve CSS pixels)
@@ -966,6 +1095,8 @@
   async function settleLayout(opts, t) {
     var zoom = el("mdict-zoom");
     t = t || { mark: function () {} };
+    fixFonts(zoom);
+    t.mark("families");
     fragmentable(zoom);
     t.mark("fragmentable");
     await waitForImages(zoom, opts.imageTimeout || 1500);

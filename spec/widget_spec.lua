@@ -74,7 +74,13 @@ describe("WebView widgets", function()
             html_link_tapped_callback = function(link) table.insert(links_tapped, link) end,
         }
         for k, v in pairs(extra or {}) do
-            if k == "vertical_hint" or k == "grey_pages" then o[k] = v else o.entry[k] = v end
+            if k == "vertical_hint" or k == "grey_pages" then
+                o[k] = v
+            elseif k == "doc" then
+                for dk, dv in pairs(v) do o.doc[dk] = dv end
+            else
+                o.entry[k] = v
+            end
         end
         return assert(WebScrollWidget.create(o))
     end
@@ -147,6 +153,38 @@ describe("WebView widgets", function()
         assert.truthy(box._search_index[1] and #box._search_index[1] >= 1) -- one rect per piece
         assert.is_false(box:findText("oneword"))
         w:free()
+    end)
+
+    -- a monospace font, whose "i" is far wider than a proportional font's
+    local mono_font
+    for _, f in ipairs({ "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+                         "/usr/share/fonts/dejavu/DejaVuSansMono.ttf", "/System/Library/Fonts/Menlo.ttc" }) do
+        if require("mdict/fs").isFile(f) then mono_font = f break end
+    end
+    local function link_widths(user_font)
+        local html = entry("fonts")
+        local stylesheets = dict:stylesheetsOf(html)
+        local w = widget_for(html, { doc = { user_font = user_font,
+            css_families = user_font and require("renderers/manager").cssFamilies(dict, stylesheets) } })
+        local widths = {}
+        for _, l in ipairs(w.htmlbox_widget:_links()) do widths[l.uri:match("[^/]+$")] = l.x1 - l.x0 end
+        w:free()
+        return widths
+    end
+
+    ;(mono_font and it or pending)("gives the reader's font to text in generic families and in the entry's own styles",
+        function()
+        local mine = link_widths({ file = mono_font, scope = "all" })
+        -- a family the dictionary's stylesheet names: the reader's font stands in for it
+        local ref = assert(mine.named)
+        for _, name in ipairs({ "body", "generic", "short", "media", "own", "attr", "face", "uimono", "mono" }) do
+            assert.is_true(math.abs(mine[name] - ref) <= 1, name .. ": " .. tostring(mine[name]) .. " ~= " .. ref)
+        end
+        -- without it: the dictionary's fonts, and ui-monospace (unknown to Chromium) as monospace
+        local own = link_widths(nil)
+        assert.is_true(own.generic < ref * 0.8)
+        assert.is_true(math.abs(own.uimono - own.mono) <= 1)
+        assert.is_true(math.abs(own.mono - ref) <= 1)
     end)
 
     it("follows links and selects text", function()

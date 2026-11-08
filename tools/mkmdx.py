@@ -209,6 +209,13 @@ def basic_entries(n=3000, seed=1):
     d["ラーメン"] = '<div class="hw">ラーメン</div>'
     d["split"] = '<div class="hw"><b>spl</b>it</div><p>one</p><p>word</p>'
     d["long"] = '<div class="hw">long</div>' + "<p>%s</p>" % ("lorem ipsum dolor sit amet " * 4000)
+    # a word in families named every way an entry can name them (see fonts.css)
+    fonts = [("named", 'class="named"'), ("body", ""), ("generic", 'class="generic"'), ("short", 'class="short"'),
+             ("media", 'class="media"'), ("own", 'class="own"'), ("attr", 'style="font-family:cursive"'),
+             ("uimono", 'style="font-family:ui-monospace"'), ("mono", 'style="font-family:monospace"')]
+    d["fonts"] = ('<link rel="stylesheet" href="fonts.css"><style>.own{font-family:"Entry Font",serif}</style>'
+                  + "<p>" + " ".join('<a href="entry://%s" %s>iiiiiiii</a>' % f for f in fonts)
+                  + ' <font face="Font Face"><a href="entry://face">iiiiiiii</a></font></p>')
     return d
 
 
@@ -218,6 +225,9 @@ def fixtures(out):
     write(os.path.join(out, "basic.mdx"), d, title="Basic Test")
     m = {"\\basic.css": b".hw{font-weight:bold}\n.def{margin-left:1em}\n@font-face{font-family:T;src:url(fonts/t.ttf)}",
          "\\img\\icon.png": PNG_1PX, "\\fonts\\t.ttf": b"\x00\x01\x00\x00fakefont",
+         "\\fonts.css": b"a{font-size:20px}\nbody{font-family:ui-serif}\n.named{font-family:Verdana}\n"
+                         b".generic{font-family:sans-serif}\n.short{font:20px/1.5 system-ui}\n"
+                         b"@media screen{.media{font-family:fantasy}}",
          "\\chain\\a.css": b'@import "b.css";', "\\chain\\b.css": b".x{background:url(../img/icon.png)}",
          "\\audio\\run#_gb_1.aac": b"\xff\xf1fake-adts"}
     random.seed(2)
