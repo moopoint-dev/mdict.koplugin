@@ -7,13 +7,11 @@ indexes inline, and prints the results KOReader would get.
 ]]
 local here = arg[0]:match("^(.*)/tools/[^/]+$") or "."
 package.path = here .. "/mdict.koplugin/?.lua;" .. package.path
-local ffi = require("ffi")
 local Dictionary = require("mdict/dictionary")
 local Lookup = require("mdict/lookup")
-
-pcall(ffi.cdef, "typedef struct { long tv_sec; long tv_nsec; } mdl_ts; int clock_gettime(int, mdl_ts *);")
-local ts = ffi.new("mdl_ts")
-local function now() ffi.C.clock_gettime(1, ts); return tonumber(ts.tv_sec) + tonumber(ts.tv_nsec) / 1e9 end
+-- the plugin's clock: it declares clock_gettime for struct timespec, which a declaration of
+-- our own could not take back
+local now = require("mdict/clock")
 
 local cache, path = arg[1], arg[2]
 local d = Dictionary.new({ path = path, cache_dir = cache })

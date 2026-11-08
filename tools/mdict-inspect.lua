@@ -13,15 +13,9 @@ for use as rendering fixtures.
 local here = arg[0]:match("^(.*)/tools/[^/]+$") or "."
 package.path = here .. "/mdict.koplugin/?.lua;" .. package.path
 
-local ffi = require("ffi")
 local Reader = require("mdict/reader")
-
-pcall(ffi.cdef, "typedef struct { long tv_sec; long tv_nsec; } mdict_timespec; int clock_gettime(int, mdict_timespec *);")
-local ts = ffi.new("mdict_timespec")
-local function now()
-    ffi.C.clock_gettime(1, ts)
-    return tonumber(ts.tv_sec) + tonumber(ts.tv_nsec) / 1e9
-end
+-- the plugin's clock (see tools/mdict-lookup.lua)
+local now = require("mdict/clock")
 
 local path = arg[1]
 local opts = {}
