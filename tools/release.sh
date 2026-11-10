@@ -1,6 +1,8 @@
 #!/bin/sh
 # Packs the plugin for installation: dist/mdict.koplugin-<version>.zip, which
-# unzips to mdict.koplugin/ (copy it into koreader/plugins/).
+# unzips to mdict.koplugin/ (copy it into koreader/plugins/), and the index tool
+# for dictionary makers: dist/koidx-<version>.zip (koidx/koidx.py and the
+# kosort-1 files it needs).
 #
 #   tools/release.sh [version]
 #
@@ -46,3 +48,12 @@ out="dist/mdict.koplugin-$version.zip"
 rm -f "$out"
 zip -qr -X "$out" mdict.koplugin -x '*/.*' -x '*.orig'
 echo "$out"
+
+tool="dist/koidx-$version.zip"
+rm -f "$tool"
+stage=$(mktemp -d)
+mkdir "$stage/koidx"
+cp tools/koidx.py tools/kosort.py tools/kosort1_tables.json "$stage/koidx/"
+(cd "$stage" && zip -qr -X - koidx) > "$tool"
+rm -rf "$stage"
+echo "$tool"
