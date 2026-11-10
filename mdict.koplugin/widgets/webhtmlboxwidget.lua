@@ -356,10 +356,19 @@ function WebHtmlBoxWidget:onTapText(arg, ges)
     end
     if not G_reader_settings:isFalse("tap_to_follow_links") then
         local link, away = self:getLinkByPosition(pos)
-        -- (for reports of taps that missed: where it was, and what the page's links are)
-        logger.info(string.format("MDict: tap at %d,%d on page %d: %s", math.floor(pos.x), math.floor(pos.y), self.page_number,
+        -- (for reports of taps that missed: where it was, and what the page's links are; taps
+        -- right on a link only at debug level)
+        local log = (link and (away or 0) == 0) and logger.dbg or logger.info
+        log(string.format("MDict: tap at %d,%d on page %d: %s", math.floor(pos.x), math.floor(pos.y), self.page_number,
             link and ("link " .. tostring(link.uri) .. (away and away > 0 and string.format(" (%d px away)", math.floor(away + 0.5)) or ""))
             or ("no link (" .. #(self.links_cache[self.page_number] or {}) .. " on the page)")))
+        if link and link.uri and link.uri:find("^mdict%-sound://") and self.html_link_tapped_callback then
+            -- A sound link is KOReader's to play, as in MDict apps: not first offered to the entry's
+            -- scripts, which waits for the WebView, and it may be laying out the next result
+            -- (seconds on a Clear7 before the sound played).
+            self.html_link_tapped_callback(link)
+            return true
+        end
         if link then
             -- a place in the same entry (bword://#x: one written as entry://#x elsewhere)
             local anchor = link.uri and (link.uri:match("^#(.+)$") or link.uri:match("^bword://#(.+)$"))
