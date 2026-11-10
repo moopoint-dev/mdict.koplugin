@@ -73,6 +73,41 @@ describe("dictionary", function()
         d:close()
     end)
 
+    it("drops extracted resources when the mdd files change", function()
+        local lfs = require("lfs")
+        local dir = helper.tmpdir("resstamp")
+        for _, name in ipairs({ "basic.mdx", "basic.mdd" }) do
+            local src = assert(io.open(fx .. "/" .. name, "rb"))
+            local dst = assert(io.open(dir .. "/" .. name, "wb"))
+            dst:write(src:read("*a"))
+            src:close()
+            dst:close()
+        end
+        local c = helper.tmpdir("rescache")
+        local d = Dictionary.new({ path = dir .. "/basic.mdx", cache_dir = c })
+        local css = assert(d:resource("basic.css"))
+        d:close()
+        -- the same files in a later session: the extracted copy stays
+        d = Dictionary.new({ path = dir .. "/basic.mdx", cache_dir = c })
+        assert.truthy(d:open())
+        assert.truthy(fs.isFile(css))
+        d:close()
+        -- a new .mdd copied over the old one: dropped, then taken from the new file
+        local t = os.time() - 3600
+        lfs.touch(dir .. "/basic.mdd", t, t)
+        d = Dictionary.new({ path = dir .. "/basic.mdx", cache_dir = c })
+        assert.truthy(d:open())
+        assert.is_false(fs.isFile(css))
+        assert.equal(css, d:resource("basic.css"))
+        d:close()
+        -- a cache without a stamp (first session with this version, Rebuild indexes) is kept
+        os.remove(c .. "/idx/" .. d.id .. ".res.stamp")
+        d = Dictionary.new({ path = dir .. "/basic.mdx", cache_dir = c })
+        assert.truthy(d:open())
+        assert.truthy(fs.isFile(css))
+        d:close()
+    end)
+
     it("gathers an entry's CSS for KOReader's renderer", function()
         local d = open("basic.mdx")
         local fresh = helper.tmpdir("staticcache")

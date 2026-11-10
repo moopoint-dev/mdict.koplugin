@@ -90,7 +90,31 @@ function Dictionary:open()
             self.files[#self.files + 1] = { reader = r, path = p, kind = "mdd" .. i }
         end
     end
+    self:_checkResources()
     return true
+end
+
+--- Extracted resources (and what is made from them, such as rewritten stylesheets) hold only
+-- for the .mdd files they came from: when those changed (a new export copied over the old),
+-- the extracted copies are dropped and taken again from the new files. The .mdd files' names,
+-- sizes and mtimes are kept in the index folder, which pruning extracted files does not touch.
+-- Without a stamp yet (a first session, or after Rebuild indexes) the copies are kept.
+function Dictionary:_checkResources()
+    local parts = {}
+    for _, p in ipairs(self.mdd_paths) do
+        local size, mtime = fs.stat(p)
+        parts[#parts + 1] = string.format("%s %s %s", fs.basename(p), tostring(size), tostring(mtime))
+    end
+    local stamp = table.concat(parts, "\n") .. "\n"
+    local path = string.format("%s/%s.res.stamp", self.idx_dir, self.id)
+    local old = fs.readAll(path)
+    if old == stamp then return end
+    if old and fs.isDir(self.res_dir) then
+        fs.removeTree(self.res_dir)
+        require("logger").info("MDict: the resource files of " .. tostring(self.title)
+            .. " changed: extracted copies dropped")
+    end
+    fs.writeAtomic(path, stamp)
 end
 
 function Dictionary:close()
