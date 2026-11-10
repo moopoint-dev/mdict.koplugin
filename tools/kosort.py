@@ -92,8 +92,78 @@ def _fold(c):
     return c
 
 
+def _decode_lenient(b):
+    """Code points of bytes `b` exactly as the plugin's kosort.lua decodes them: invalid
+    sequences become U+FFFD the way it does, surrogates and overlong forms pass through."""
+    cps, i, n = [], 0, len(b)
+    while i < n:
+        c0 = b[i]
+        if c0 < 0x80:
+            c, extra = c0, 0
+        elif 0xF0 <= c0 < 0xF8:
+            c, extra = c0 & 0x07, 3
+        elif c0 >= 0xE0:
+            c, extra = c0 & 0x0F, 2
+        elif c0 >= 0xC2:
+            c, extra = c0 & 0x1F, 1
+        else:
+            c, extra = 0xFFFD, 0
+        for k in range(1, extra + 1):
+            if i + k >= n or (b[i + k] & 0xC0) != 0x80:
+                c, extra = 0xFFFD, k - 1
+                break
+            c = c * 64 + (b[i + k] & 0x3F)
+        cps.append(c)
+        i += extra + 1
+    return cps
+
+
+def _encode_lenient(cps):
+    """UTF-8 bytes of code points as kosort.lua writes them (surrogates included)."""
+    out = bytearray()
+    for c in cps:
+        if c < 0x80:
+            out.append(c)
+        elif c < 0x800:
+            out += bytes((0xC0 | (c >> 6), 0x80 | (c & 0x3F)))
+        elif c < 0x10000:
+            out += bytes((0xE0 | (c >> 12), 0x80 | ((c >> 6) & 0x3F), 0x80 | (c & 0x3F)))
+        else:
+            out += bytes((0xF0 | (c >> 18), 0x80 | ((c >> 12) & 0x3F), 0x80 | ((c >> 6) & 0x3F), 0x80 | (c & 0x3F)))
+    return bytes(out)
+
+
+_ASCII_DROP = bytes(c for c in range(128) if c in _DROP)
+
+
+def normalize_bytes(key):
+    """kosort-1 normalised bytes of the key bytes `key`, identical to the plugin's
+    kosort.normalize for any input, including invalid UTF-8. Indexes (tools/koidx.py)
+    are built with this."""
+    if key.isascii():
+        return key.translate(None, _ASCII_DROP).lower()
+    try:
+        cps = [ord(ch) for ch in key.decode("utf-8")]
+        strict = True
+    except UnicodeDecodeError:
+        cps = _decode_lenient(key)
+        strict = False
+    if any(c in _CHANGES for c in cps):
+        cps = nfkc_codepoints(cps)
+    out = []
+    for c in cps:
+        for m in _LOWER.get(c, (c,)):
+            m = _fold(m)
+            if m not in _DROP:
+                out.append(m)
+    if strict:
+        return "".join(map(chr, out)).encode("utf-8")
+    return _encode_lenient(out)
+
+
 def normalize(key):
-    """kosort-1 normalised form of `key` (str or UTF-8 bytes), as str."""
+    """kosort-1 normalised form of `key` (str or UTF-8 bytes), as str. For bytes that may not
+    be valid UTF-8, use normalize_bytes, which matches the plugin byte for byte."""
     if isinstance(key, bytes):
         key = key.decode("utf-8", "replace")
     cps = [ord(ch) for ch in key]
@@ -110,7 +180,9 @@ def normalize(key):
 
 def sort_key(key):
     """Sort key for exporters: the normalised UTF-8 bytes."""
-    return normalize(key).encode("utf-8")
+    if isinstance(key, str):
+        key = key.encode("utf-8", "surrogatepass")
+    return normalize_bytes(key)
 
 
 VECTORS = [
@@ -126,12 +198,21 @@ VECTORS = [
 ]
 
 
+# Byte strings that are not valid UTF-8 (hex), normalised as the plugin decodes them.
+BYTE_VECTORS = [
+    "ff", "c0af", "e0", "e381", "e381ff", "eda080", "f4908080", "f8888080", "41ff42", "e382a2c3",
+    "efbca1fe", "80", "c2", "ed9fbf", "f09f9880",
+]
+
+
 def write_vectors(path):
     with open(path, "w", encoding="utf-8") as f:
         f.write("# %s test vectors (Unicode %s): input<TAB>normalised, both as escaped UTF-8 hex\n"
                 % (SPEC, UNICODE_VERSION))
         for v in VECTORS:
             f.write("%s\t%s\n" % (v.encode("utf-8").hex(), normalize(v).encode("utf-8").hex()))
+        for h in BYTE_VECTORS:
+            f.write("%s\t%s\n" % (h, normalize_bytes(bytes.fromhex(h)).hex()))
 
 
 def check_vectors(path):
@@ -141,7 +222,7 @@ def check_vectors(path):
             if line.startswith("#") or not line.strip():
                 continue
             src, want = line.rstrip("\n").split("\t")
-            got = normalize(bytes.fromhex(src)).encode("utf-8").hex()
+            got = normalize_bytes(bytes.fromhex(src)).hex()
             if got != want:
                 bad += 1
                 print("MISMATCH", bytes.fromhex(src).decode("utf-8"), got, want)

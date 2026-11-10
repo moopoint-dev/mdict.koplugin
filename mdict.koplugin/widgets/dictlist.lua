@@ -31,6 +31,9 @@ function DictList.status(d)
     local job, fraction = require("mdict/indexer").status()
     if job and job.path == d.path then
         local pct = math.floor((fraction or 0) * 100)
+        if job.mode == "verify" then
+            return T(_("checking %1 %"), pct), T(_("Checking the index file that came with it: %1 % done."), pct)
+        end
         return T(_("indexing %1 %"), pct), T(_("Building its index: %1 % done."), pct)
     end
     local states = d:indexStates()
@@ -39,6 +42,8 @@ function DictList.status(d)
         local stored = d:storedIndexState()
         if stored == "sidecar" then
             return _("ready"), _("Ready: it has an index file. Not opened yet.")
+        elseif stored == "shipped" then
+            return _("ready"), _("Ready: it came with an index file (.koidx). Not opened yet.")
         elseif stored == "file-order" then
             return _("ready"), _("Ready: its keys are already sorted. Not opened yet.")
         elseif queued(d.path) then
@@ -47,6 +52,10 @@ function DictList.status(d)
         return _("not opened"), _("Not opened yet. Its index is checked or built when it is first used.")
     end
     if s == "sidecar" then return _("ready"), _("Ready: it has an index file.") end
+    if s == "shipped" then return _("ready"), _("Ready: it came with an index file (.koidx).") end
+    if s == "shipped (checking)" then
+        return _("ready"), _("Ready: it came with an index file (.koidx), which is being checked.")
+    end
     if s == "file-order" then return _("ready"), _("Ready: its keys are already sorted.") end
     if s == "memory" then return _("ready"), _("Ready: small enough to be indexed in memory.") end
     if s == "file-order (unverified)" then
@@ -66,6 +75,10 @@ function DictList.details(d)
     local lines = { d.title, "" }
     local long = select(2, DictList.status(d))
     lines[#lines + 1] = long
+    local first = d:indexStates()[1]
+    if first and first.shipped_problem then
+        lines[#lines + 1] = T(_("Its .koidx index file was not used: %1"), first.shipped_problem)
+    end
     lines[#lines + 1] = ""
     lines[#lines + 1] = T(_("File: %1"), fs.basename(d.path))
     lines[#lines + 1] = T(_("Folder: %1"), fs.dirname(d.path))

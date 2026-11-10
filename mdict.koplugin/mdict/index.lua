@@ -12,6 +12,22 @@ a normalised form of each key:
   key bytes plus a 4-byte key ordinal, packed into fixed-size pages, with the
   first key of every page kept in memory.
 
+Sidecars come in two formats with the same pages. Format 1 (64-byte header) is
+built by the plugin into its cache and tied to the file's size and mtime.
+Format 2 (128-byte header) is a ".koidx" file a dictionary maker ships beside
+the volume (tools/koidx.py writes it). It is tied to the volume's content: the
+length and CRC-32 of the volume's header and key section, which is all an index
+depends on. Its header:
+
+    0  magic "KOMDXIX" 2     32 max_key      48 pages_off (8)   76 source_crc32
+    8  header_len            36 page_size    56 dir_off (8)     80 source_size (8)
+    12 flags                 40 count        64 dir_len         88 body_crc32
+    16 spec (16, NUL-padded) 44 pages        68 source_len (8)  92 builder (32)
+                                                                124 header_crc32
+
+All big-endian. Flag bits 16-31 must be understood: a file with an unknown one
+set is ignored. body_crc32 covers the pages and the directory.
+
 Verification never trusts the header hint KOReaderKeyOrder: a cheap check of
 the key-block boundaries rejects most unsorted files without decompressing
 anything, and the full check streams every key, sharing the pass with the
@@ -22,6 +38,7 @@ local bit = require("bit")
 local ffi = require("ffi")
 local fileio = require("mdict/fileio")
 local kosort = require("mdict/kosort")
+local zlib = require("mdict/zlib")
 
 local band, rshift = bit.band, bit.rshift
 local byte, char, sub = string.byte, string.char, string.sub
@@ -33,6 +50,14 @@ Index.PAGE_SIZE = 4096
 Index.MAX_KEY = 1000 -- normalised keys are truncated to this many bytes, for both indexing and queries
 Index.CHUNK = 200000 -- keys sorted in memory per run of the external sort
 local MAGIC = "KOMDXIX" .. char(Index.FORMAT)
+
+Index.SHIPPED_FORMAT = 2
+Index.SHIPPED_EXT = ".koidx" -- beside the volume: X.mdx.koidx, X.1.mdd.koidx
+Index.SHIPPED_HEADER = 128
+Index.SHIPPED_SAMPLES = 8 -- keys compared with the volume when a shipped index is opened
+Index.VERIFY_SAMPLES = 128 -- and when it is verified in the background
+Index.KNOWN_FLAGS = 0xFFFF -- optional bits are ignored; none of the must-understand bits is known yet
+local MAGIC2 = "KOMDXIX" .. char(Index.SHIPPED_FORMAT)
 
 --- Resource paths in .mdd files: case-insensitive ASCII, either slash.
 local function res_normalize(s)
@@ -307,27 +332,79 @@ end
 local SidecarIndex = {}
 SidecarIndex.__index = SidecarIndex
 
---- Opens a sidecar. Returns the index, or nil and a reason (stale, corrupt...).
+--- Fields of a format 2 header (a 128-byte string), or nil and a reason.
+function Index.parseShippedHeader(h)
+    if not h or #h < Index.SHIPPED_HEADER then return nil, "too short for an index" end
+    if sub(h, 1, 8) ~= MAGIC2 then return nil, "not a .koidx index" end
+    if zlib.crc32(0, sub(h, 1, 124)) ~= rd32(h, 125) then return nil, "header checksum mismatch" end
+    local t = {
+        header_len = rd32(h, 9), flags = rd32(h, 13), spec = (sub(h, 17, 32):gsub("%z+$", "")),
+        max_key = rd32(h, 33), page_size = rd32(h, 37), count = rd32(h, 41), pages = rd32(h, 45),
+        pages_off = rd64(h, 49), dir_off = rd64(h, 57), dir_len = rd32(h, 65),
+        source_len = rd64(h, 69), source_crc32 = rd32(h, 77), source_size = rd64(h, 81),
+        body_crc32 = rd32(h, 89), builder = (sub(h, 93, 124):gsub("%z+$", "")),
+    }
+    if band(t.flags, bit.bnot(Index.KNOWN_FLAGS)) ~= 0 then
+        return nil, string.format("needs a newer plugin (flags %08x)", t.flags)
+    end
+    if t.header_len < Index.SHIPPED_HEADER or t.pages_off < t.header_len then return nil, "bad header length" end
+    if t.max_key ~= Index.MAX_KEY then
+        return nil, string.format("keys cut at %d bytes, the plugin cuts at %d", t.max_key, Index.MAX_KEY)
+    end
+    if t.page_size < 512 or t.page_size > 65536 then return nil, "bad page size " .. t.page_size end
+    if t.dir_off ~= t.pages_off + t.pages * t.page_size then return nil, "bad page directory offset" end
+    return t
+end
+
+--- Opens a sidecar of either format. Returns the index, or nil and a reason (stale, corrupt...).
+-- expect: size, mtime (format 1: the source file's), keys, format (1 or 2: only that one).
 function Index.openSidecar(path, spec, expect)
+    expect = expect or {}
     local f = io.open(path, "rb")
     if not f then return nil, "missing" end
-    local header = f:read(64)
-    if not header or #header < 64 or sub(header, 1, 8) ~= MAGIC then
+    local magic = f:read(8)
+    local h, format, hspec, count, pages, dir_off, dir_len, page_size, pages_off
+    if magic == MAGIC then
+        format = 1
+        local header = magic .. (f:read(56) or "")
+        if #header < 64 then
+            f:close()
+            return nil, "truncated header"
+        end
+        hspec = sub(header, 9, 24):gsub("%z+$", "")
+        local size, mtime = rd64(header, 25), rd64(header, 33)
+        count, pages = rd32(header, 41), rd32(header, 45)
+        dir_off, dir_len, page_size = rd64(header, 49), rd32(header, 57), rd32(header, 61)
+        pages_off = 64
+        if (expect.size and expect.size ~= size) or (expect.mtime and expect.mtime ~= mtime) then
+            f:close()
+            return nil, "stale"
+        end
+    elseif magic == MAGIC2 then
+        format = 2
+        local err
+        h, err = Index.parseShippedHeader(magic .. (f:read(Index.SHIPPED_HEADER - 8) or ""))
+        if not h then
+            f:close()
+            return nil, err
+        end
+        hspec, count, pages, dir_off, dir_len = h.spec, h.count, h.pages, h.dir_off, h.dir_len
+        page_size, pages_off = h.page_size, h.pages_off
+    else
         f:close()
         return nil, "not a sidecar index (or older format)"
     end
-    local hspec = sub(header, 9, 24):gsub("%z+$", "")
-    local size, mtime = rd64(header, 25), rd64(header, 33)
-    local count, pages = rd32(header, 41), rd32(header, 45)
-    local dir_off, dir_len, page_size = rd64(header, 49), rd32(header, 57), rd32(header, 61)
+    if expect.format and expect.format ~= format then
+        f:close()
+        return nil, "format " .. format .. ", expected " .. expect.format
+    end
     if hspec ~= spec then
         f:close()
         return nil, "built for " .. hspec
     end
-    if expect and ((expect.size and expect.size ~= size) or (expect.mtime and expect.mtime ~= mtime)
-                   or (expect.keys and expect.keys ~= count)) then
+    if expect.keys and expect.keys ~= count then
         f:close()
-        return nil, "stale"
+        return nil, format == 1 and "stale" or string.format("built for %d keys, the file has %d", count, expect.keys)
     end
     f:seek("set", dir_off)
     local dblob = f:read(dir_len) or ""
@@ -339,24 +416,28 @@ function Index.openSidecar(path, spec, expect)
         dir[#dir + 1] = sub(dblob, i, i + n - 1)
         i = i + n
     end
-    if #dir ~= pages then return nil, "corrupt directory" end
+    if #dir ~= pages or i ~= #dblob + 1 then return nil, "corrupt directory" end
     local file = assert(fileio.open(path))
     return setmetatable({
-        path = path, file = file, spec = spec, count = count, pages = pages, dir = dir,
-        page_size = page_size, page_cache = {}, page_order = {}, norm = Index.normalizer(spec),
+        path = path, file = file, spec = spec, count = count, pages = pages, dir = dir, format = format,
+        header = h, page_size = page_size, pages_off = pages_off, page_cache = {}, page_order = {},
+        norm = Index.normalizer(spec),
     }, SidecarIndex)
 end
 
 function SidecarIndex:_page(p)
     local recs = self.page_cache[p]
     if recs then return recs end
-    local buf = self.file:read(64 + (p - 1) * self.page_size, self.page_size)
+    local size = self.page_size
+    local buf = self.file:read(self.pages_off + (p - 1) * size, size)
     local n = buf[0] * 256 + buf[1]
     recs = {}
     local i = 2
     for k = 1, n do
+        if i + 2 > size then error("corrupt index page " .. p, 0) end
         local len
         len, i = rd_varint_ptr(buf, i)
+        if i + len + 4 > size then error("corrupt index page " .. p, 0) end
         local key = ffi.string(buf + i, len)
         i = i + len
         local ord = ((buf[i] * 256 + buf[i + 1]) * 256 + buf[i + 2]) * 256 + buf[i + 3]
@@ -431,6 +512,98 @@ end
 function SidecarIndex:close()
     if self.file then self.file:close() end
     self.file = nil
+end
+
+---------------------------------------------------------------- shipped indexes
+
+--- Where the volume's records start: what a shipped index's source_len must be.
+local function keys_end(reader)
+    return reader.kb_fpos[reader.num_key_blocks]
+end
+
+--- Cheap checks that an opened format 2 index belongs to `reader`'s volume: the key count, the
+-- length of the header and key section, and `samples` keys spread over the pages, normalised
+-- here and compared with the index. Returns true, or nil and a reason.
+function Index.checkShipped(idx, reader, samples)
+    local h = idx.header
+    if not h then return nil, "not a shipped index" end
+    if idx.count ~= reader.num_entries then
+        return nil, string.format("built for %d keys, the file has %d", idx.count, reader.num_entries)
+    end
+    if h.source_len ~= keys_end(reader) then return nil, "built for another file" end
+    if idx.pages == 0 then
+        return idx.count == 0 or nil, "no pages"
+    end
+    local n = math.min(samples or Index.SHIPPED_SAMPLES, idx.pages)
+    local ok, why = pcall(function()
+        for k = 0, n - 1 do
+            local p = n == 1 and 1 or 1 + math.floor(k * (idx.pages - 1) / (n - 1))
+            local recs = idx:_page(p)
+            if #recs == 0 then error("empty index page " .. p, 0) end
+            local r = recs[math.floor((#recs + 1) / 2)]
+            if r[2] >= idx.count then error("key number out of range", 0) end
+            if idx.norm(reader:keyAt(r[2]) or "") ~= r[1] then
+                error(string.format("key %d is not the one indexed", r[2]), 0)
+            end
+        end
+    end)
+    if not ok then return nil, tostring(why) end
+    return true
+end
+
+-- CRC-32 of `len` bytes of an open file from `pos`; calls each_chunk(s) when given.
+local function crc_range(f, pos, len, each_chunk, chunk)
+    f:seek("set", pos)
+    local crc, left = 0, len
+    while left > 0 do
+        local s = f:read(math.min(left, chunk or 1048576))
+        if not s or #s == 0 then return nil end
+        crc = zlib.crc32(crc, s)
+        if each_chunk then each_chunk(s) end
+        left = left - #s
+    end
+    return crc
+end
+
+--- The full check of a shipped index, for a background job: the CRC-32 of the volume's header
+-- and key section and of the index body, the page counts, the directory order and
+-- Index.VERIFY_SAMPLES keys. Returns true, or nil and a reason.
+function Index.verifyShipped(path, volume, spec, progress)
+    local Reader = require("mdict/reader")
+    local idx, err = Index.openSidecar(path, spec, { format = 2 })
+    if not idx then return nil, err end
+    local h = idx.header
+    local ok, why = pcall(function()
+        local f = assert(io.open(volume, "rb"))
+        local crc = crc_range(f, 0, h.source_len)
+        f:close()
+        if crc ~= h.source_crc32 then error("built for another version of the file", 0) end
+        if progress then progress(0.3) end
+        f = assert(io.open(path, "rb"))
+        local total = 0
+        local size = h.page_size
+        crc = crc_range(f, h.pages_off, h.pages * size, function(s)
+            for at = 1, #s - 1, size do
+                total = total + byte(s, at) * 256 + byte(s, at + 1)
+            end
+        end, size * 256)
+        if crc then crc = zlib.crc32(crc, f:read(h.dir_len) or "") end
+        f:close()
+        if crc ~= h.body_crc32 then error("the index file is damaged", 0) end
+        if total ~= idx.count then error("the index holds " .. total .. " keys, its header says " .. idx.count, 0) end
+        for p = 2, idx.pages do
+            if idx.dir[p] < idx.dir[p - 1] then error("index pages out of order", 0) end
+        end
+        if progress then progress(0.6) end
+        local reader = assert(Reader.open(volume))
+        local sok, swhy = Index.checkShipped(idx, reader, Index.VERIFY_SAMPLES)
+        reader:close()
+        if not sok then error(swhy, 0) end
+    end)
+    idx:close()
+    if progress then progress(1) end
+    if not ok then return nil, tostring(why) end
+    return true
 end
 
 ---------------------------------------------------------------- file-order lookup

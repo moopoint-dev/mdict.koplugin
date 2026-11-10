@@ -3,12 +3,15 @@ One MDict dictionary: its .mdx file, its .mdd resource files, their indexes
 and the extracted-resource cache.
 
 Index choice, per file (see Dictionary:_openIndex):
-  1. a valid sidecar index (built for this size/mtime/spec)
-  2. the file's own order, when a full check found it sorted under the spec
-  3. an in-memory index, for small files
-  4. the file's own order, when the header promises it (KOReaderKeyOrder) and
+  1. a valid sidecar index in the cache (built for this size/mtime/spec)
+  2. a .koidx index shipped beside the file (X.mdx.koidx), once cheap checks
+     tie it to the file; a full check is queued the first time, and a file
+     that fails it is set aside until either file changes
+  3. the file's own order, when a full check found it sorted under the spec
+  4. an in-memory index, for small files
+  5. the file's own order, when the header promises it (KOReaderKeyOrder) and
      the key-block boundaries agree; a full check is queued
-  5. otherwise nothing yet: a sidecar build is queued, and lookups in this
+  6. otherwise nothing yet: a sidecar build is queued, and lookups in this
      dictionary report that it is being indexed
 ]]
 
@@ -101,9 +104,10 @@ end
 
 -- index bookkeeping ------------------------------------------------------------
 
+--- Cache files for one of the dictionary's files: sidecar, verdict, verdict on a shipped .koidx.
 function Dictionary:_paths(f)
     local base = string.format("%s/%s.%s", self.idx_dir, self.id, f.kind)
-    return base .. ".idx", base .. ".verdict"
+    return base .. ".idx", base .. ".verdict", base .. ".koidx.verdict"
 end
 
 local function spec_of(reader)
@@ -127,10 +131,17 @@ function Dictionary:_openIndex(f)
     local size, mtime = fs.stat(f.path)
     local sidecar, verdict_path = self:_paths(f)
     f.size, f.mtime = size, mtime
-    local idx = Index.openSidecar(sidecar, spec, { size = size, mtime = mtime, keys = reader.num_entries })
+    local idx = Index.openSidecar(sidecar, spec, { size = size, mtime = mtime, keys = reader.num_entries, format = 1 })
     if idx then
         f.index, f.state = idx, "sidecar"
         return idx
+    end
+    local shipped, sstate, check = self:_openShipped(f, spec)
+    if shipped then
+        f.index, f.state = shipped, sstate
+        if check then self:_requestVerify(f, spec) end
+        if f.index then return f.index end
+        return self:_openIndex(f) -- checked at once (no background builder) and set aside
     end
     local v = read_verdict(verdict_path)
     if v and v.spec == spec and v.size == size and v.mtime == mtime and v.keys == reader.num_entries then
@@ -167,6 +178,85 @@ function Dictionary:_openIndex(f)
     return nil, "indexing"
 end
 
+-- The verdict on a shipped index, when it was made for these two files as they are now.
+local function shipped_verdict(path, spec, size, mtime, ksize, kmtime)
+    local v = read_verdict(path)
+    if v and v.spec == spec and v.size == size and v.mtime == mtime and v.koidx_size == ksize
+            and v.koidx_mtime == kmtime then
+        return v
+    end
+end
+
+--- The .koidx index shipped beside file `f`, if there is one and it fits the file.
+-- Returns the index, its state and whether it still needs its full check; or nil.
+function Dictionary:_openShipped(f, spec)
+    local path = f.path .. Index.SHIPPED_EXT
+    local ksize, kmtime = fs.stat(path)
+    if not ksize then return nil end
+    local _, _, vpath = self:_paths(f)
+    local v = shipped_verdict(vpath, spec, f.size, f.mtime, ksize, kmtime)
+    if v and not v.ok then
+        f.shipped_problem = v.reason
+        return nil
+    end
+    local function reject(reason)
+        f.shipped_problem = reason
+        require("logger").warn("MDict: not using " .. path .. ":", reason)
+        Dictionary.writeVerdict(vpath, { spec = spec, size = f.size, mtime = f.mtime, koidx_size = ksize,
+            koidx_mtime = kmtime, ok = false, reason = reason })
+    end
+    local idx, err = Index.openSidecar(path, spec, { format = 2 })
+    if not idx then
+        reject(err)
+        return nil
+    end
+    f.shipped = { path = path, size = ksize, mtime = kmtime, verdict = vpath }
+    if v then return idx, "shipped", false end
+    local ok, why = Index.checkShipped(idx, f.reader)
+    if not ok then
+        idx:close()
+        f.shipped = nil
+        reject(why)
+        return nil
+    end
+    return idx, "shipped (checking)", true
+end
+
+--- Queues the full check of a shipped index (Index.verifyShipped). Should it fail, the same job
+-- builds the usual index, which the next lookup opens.
+function Dictionary:_requestVerify(f, spec)
+    if f.building or f.verifying then return end
+    local sidecar, verdict_path, shipped_path = self:_paths(f)
+    local sh = f.shipped
+    local job = {
+        dict = self, title = self.title, path = f.path, spec = spec, sidecar = sidecar, verdict = verdict_path,
+        size = f.size, mtime = f.mtime, keys = f.reader.num_entries, mode = "verify",
+        koidx = sh.path, koidx_size = sh.size, koidx_mtime = sh.mtime, shipped_verdict = shipped_path,
+    }
+    f.verifying = true
+    local function finish(ok)
+        f.verifying = false
+        local v = shipped_verdict(shipped_path, spec, job.size, job.mtime, job.koidx_size, job.koidx_mtime)
+        if not v then return end -- cancelled: checked again next session
+        if v.ok then
+            if f.state == "shipped (checking)" then f.state = "shipped" end
+            return
+        end
+        f.shipped_problem = v.reason
+        if f.index and f.index.header then
+            f.index:close()
+            f.index, f.state, f.shipped = nil, nil, nil
+        end
+        if not ok then f.state, f.build_failed = "index failed", true end
+    end
+    if self.builder then
+        self.builder(job, finish)
+    else
+        local ok = pcall(Dictionary.buildIndexJob, job)
+        finish(ok)
+    end
+end
+
 function Dictionary:_requestBuild(f, spec)
     if f.building then return end
     local sidecar, verdict_path = self:_paths(f)
@@ -192,6 +282,13 @@ end
 --- Builds the index for a job (runs in a subprocess inside KOReader). Writes the verdict;
 -- a sidecar is kept only when the file is not already in spec order.
 function Dictionary.buildIndexJob(job, progress)
+    if job.mode == "verify" then
+        local ok, why = Index.verifyShipped(job.koidx, job.path, job.spec, progress)
+        Dictionary.writeVerdict(job.shipped_verdict, { spec = job.spec, size = job.size, mtime = job.mtime,
+            koidx_size = job.koidx_size, koidx_mtime = job.koidx_mtime, ok = ok == true, reason = why })
+        if ok then return { verified = true } end
+        progress = nil
+    end
     fs.mkdirp(fs.dirname(job.sidecar))
     local reader = assert(Reader.open(job.path))
     local stats = Index.buildSidecar(reader, job.sidecar, job.spec, {
@@ -206,28 +303,32 @@ function Dictionary.buildIndexJob(job, progress)
     return stats
 end
 
---- Index state of every file: { {path=, kind=, state=} }.
---- The state of a closed dictionary's .mdx index, from the files left by an earlier build:
--- "sidecar" or "file-order" when it is ready, else nil.
+--- The state of a closed dictionary's .mdx index, from the files left by an earlier session:
+-- "sidecar", "shipped" or "file-order" when it is ready, else nil.
 function Dictionary:storedIndexState()
     local size, mtime = fs.stat(self.path)
-    local sidecar, verdict_path = self:_paths({ kind = "mdx" })
-    local idx = Index.openSidecar(sidecar, "kosort-1", { size = size, mtime = mtime })
+    local sidecar, verdict_path, shipped_path = self:_paths({ kind = "mdx" })
+    local idx = Index.openSidecar(sidecar, "kosort-1", { size = size, mtime = mtime, format = 1 })
     if idx then
         idx:close()
         return "sidecar"
     end
+    local ksize, kmtime = fs.stat(self.path .. Index.SHIPPED_EXT)
+    local sv = ksize and shipped_verdict(shipped_path, "kosort-1", size, mtime, ksize, kmtime)
+    if sv and sv.ok then return "shipped" end
     local v = read_verdict(verdict_path)
     if v and v.sorted and v.spec == "kosort-1" and v.size == size and v.mtime == mtime then
         return "file-order"
     end
 end
 
+--- Index state of every file: { {path=, kind=, state=, shipped_problem=} }.
 function Dictionary:indexStates()
     local out = {}
     if not self.files then return out end
     for _, f in ipairs(self.files) do
-        out[#out + 1] = { path = f.path, kind = f.kind, state = f.state or "not loaded" }
+        out[#out + 1] = { path = f.path, kind = f.kind, state = f.state or "not loaded",
+                          shipped_problem = f.shipped_problem }
     end
     return out
 end

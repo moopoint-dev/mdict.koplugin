@@ -67,7 +67,8 @@ function Indexer._finish(ok)
     Indexer.current = nil
     if cur.fd then C.close(cur.fd) end
     local output = (cur.output or ""):gsub("p [%d.]+\n", "") -- without the progress lines
-    logger.info("MDict: index", ok and "built" or (cur.cancelled and "cancelled" or "FAILED"), cur.job.path,
+    local done = cur.job.mode == "verify" and "checked (or rebuilt)" or "built"
+    logger.info("MDict: index", ok and done or (cur.cancelled and "cancelled" or "FAILED"), cur.job.path,
         output:sub(-300))
     if not cur.cancelled then notify(cur.job, ok and "done" or "failed") end
     for _, cb in ipairs(cur.callbacks) do pcall(cb, ok) end
