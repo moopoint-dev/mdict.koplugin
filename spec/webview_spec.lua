@@ -7,7 +7,8 @@ local WebRenderer = require("renderers/webview")
 local function fake_bridge()
     local b = { queue = {}, provided = {}, calls = {}, polls = 0 }
     local function push(ev) b.queue[#b.queue + 1] = { raw = json.encode(ev), ready = b.polls + (b.lag or 0) } end
-    function b.session(_, fn) return fn() end
+    -- (as the Android bridge's, a session passes on two results)
+    function b.session(_, fn) local r1, r2 = fn(); return r1, r2 end
     function b.open(_, slot) push({ ev = "opened", slot = slot }) end
     function b.load(_, slot, base) b.base = base; push({ ev = "loaded", slot = slot, renewIn = b.renew_in }) end
     function b.call(_, slot, id, op, args)
@@ -240,9 +241,9 @@ describe("webview renderer", function()
         local in_session = false
         bridge.session = function(_, fn)
             in_session = true
-            local a, b, c = fn()
+            local a, b = fn()
             in_session = false
-            return a, b, c
+            return a, b
         end
         local due, woke = 0, {}
         local wr = WebRenderer.new({ bridge = bridge,

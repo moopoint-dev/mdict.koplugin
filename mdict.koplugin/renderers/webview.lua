@@ -33,6 +33,9 @@ WebRenderer.clock = monotonic
 
 -- Wall clock in milliseconds, to compare with the page's Date.now() (the clock module has
 -- declared clock_gettime and struct timespec).
+-- What _wait's polling returns when it is time to call on_wake.
+local WAKE = setmetatable({}, { __tostring = function() return "wake" end })
+
 local wall_ms
 do
     local ffi = require("ffi")
@@ -177,13 +180,14 @@ function WebRenderer:_wait(pred, timeout)
         if stored then return result(stored) end
     end
     while true do
-        local ev, err, wake = self.bridge:session(function()
+        -- (a bridge's session passes on two results: waking is told by the second)
+        local ev, err = self.bridge:session(function()
             while true do
                 local now = monotonic()
                 local left = deadline - now
                 if left <= 0 then return nil, "timeout" end
                 local wake_at = self.wake_at and self.wake_at()
-                if wake_at and now >= wake_at then return nil, nil, true end
+                if wake_at and now >= wake_at then return nil, WAKE end
                 local ms = math.min(100, math.floor(left * 1000))
                 if wake_at then ms = math.min(ms, math.floor((wake_at - now) * 1000) + 1) end
                 local raw = self.bridge:poll(math.max(1, ms))
@@ -193,7 +197,7 @@ function WebRenderer:_wait(pred, timeout)
                 end
             end
         end)
-        if not wake then return result(ev, err) end
+        if err ~= WAKE then return result(ev, err) end
         -- (outside the bridge's session: KOReader's own JNI calls, such as an e-ink refresh,
         -- attach and detach the thread themselves). Its time does not count either.
         local t = monotonic()
