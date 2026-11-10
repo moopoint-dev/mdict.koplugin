@@ -515,6 +515,9 @@ def build_index(volume_path, out=None):
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(tmp, 0o666 & ~umask)  # mkstemp makes it private; an index is as public as its volume
         os.replace(tmp, out)
     except BaseException:
         if os.path.exists(tmp):
