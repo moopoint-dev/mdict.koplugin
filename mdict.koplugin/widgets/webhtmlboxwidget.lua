@@ -135,6 +135,8 @@ function WebHtmlBoxWidget:_pageBb(n)
             target:free()
         end
     end
+    -- a page laid out ahead gets its links now (in the background job); a shown one just after
+    if ok and self.background then self:_readLinks(n) end
     if not ok then
         logger.warn("MDict: page render failed:", err)
         bb:fill(Blitbuffer.COLOR_WHITE)
@@ -197,6 +199,7 @@ function WebHtmlBoxWidget:_render()
             local job
             job = self.renderer:startJob(function()
                 if stale then return self:_redraw(n) end
+                self:_readLinks(n)
                 next_page()
             end, function()
                 if self.page_job == job then self.page_job = nil end
@@ -214,6 +217,7 @@ function WebHtmlBoxWidget:_render()
     elseif not self._prefetch then
         self._prefetch = function()
             self._prefetch = nil
+            if not self.freed then self:_readLinks(n) end
             next_page()
         end
         UIManager:scheduleIn(0.3, self._prefetch)
@@ -328,6 +332,16 @@ function WebHtmlBoxWidget:_linkReach()
     local ok, Device = pcall(require, "device")
     local dpi = ok and Device.screen and Device.screen.getDPI and Device.screen:getDPI() or 160
     return dpi * WebHtmlBoxWidget.LINK_REACH_MM / 25.4
+end
+
+-- Reads the links of page n ahead of a tap, while the pager still shows it: a tap read them
+-- itself, and on a Clear7 the first tap on a pronunciation icon waited seconds for them while the
+-- next result was being laid out ahead (the WebView does one thing at a time).
+function WebHtmlBoxWidget:_readLinks(n)
+    if self.links_cache[n] or self.freed or not (self.slot and self.slot.owner == self) then return end
+    if self.slot.page ~= n - 1 then return end
+    local links = self.renderer:links(self.slot)
+    if links and not self.freed then self.links_cache[n] = links end
 end
 
 function WebHtmlBoxWidget:getLinkByPosition(pos)
