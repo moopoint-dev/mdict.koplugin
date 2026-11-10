@@ -375,6 +375,43 @@ function Manager.roundSheets(d, stylesheets)
     return out
 end
 
+Manager.UNROUND_SUFFIX = ".mdict-unround.css"
+
+--- Path of a copy of stylesheet p with round() rewritten (Html.unround), saved next to the
+-- extracted sheet so that its relative url()s and @imports still resolve; nil if it cannot be
+-- made. Made again when the extracted sheet is newer.
+function Manager.unroundedSheet(d, p)
+    local fs = require("mdict/fs")
+    local src = d:resource(p)
+    if not src then return nil end
+    local rel = p:gsub("%.[Cc][Ss][Ss]$", "") .. Manager.UNROUND_SUFFIX
+    local target = d.res_dir .. "/" .. rel
+    local _, src_mtime = fs.stat(src)
+    local _, mtime = fs.stat(target)
+    if not (mtime and src_mtime and mtime >= src_mtime) then
+        local css = fs.readAll(src)
+        if not (css and fs.writeAtomic(target, require("mdict/html").unround(css))) then return nil end
+    end
+    return rel
+end
+
+--- The stylesheets a document links, and those the pager still has to rewrite round() in.
+-- A WebView without round() (before Chromium 125) gets saved, rewritten copies: rewriting a
+-- 1.6 MB stylesheet in the page, and parsing it a second time there, took 0.9 s each time a
+-- document was loaded on a Clear7 (WebView 109). Until the renderer knows (its first document),
+-- the pager rewrites them as before.
+function Manager.documentSheets(renderer, d, stylesheets)
+    local round_sheets = Manager.roundSheets(d, stylesheets)
+    if renderer.has_round ~= false or next(round_sheets) == nil then return stylesheets, round_sheets end
+    local linked, left = {}, {}
+    for i, p in ipairs(stylesheets) do
+        local copy = round_sheets[p] and Manager.unroundedSheet(d, p)
+        linked[i] = copy or p
+        if round_sheets[p] and not copy then left[p] = true end
+    end
+    return linked, left
+end
+
 --- A dictionary's own setting, else the global one, else the default.
 function Manager.dictSetting(settings, dict_id, key, default)
     local own = settings.dicts and settings.dicts[dict_id]
@@ -432,6 +469,7 @@ function Manager.widget(state, dql, r, opts)
     local eink = settings.eink
     if eink == nil then eink = Device:hasEinkScreen() end
     local WebScrollWidget = require("widgets/webscrollwidget")
+    local linked, round_sheets = Manager.documentSheets(renderer, d, stylesheets)
     local t0 = clock()
     t_html = t0 - t_html
     local widget, err = WebScrollWidget.create{
@@ -439,8 +477,8 @@ function Manager.widget(state, dql, r, opts)
         doc = {
             dict_id = d.id,
             cache_root = d.res_dir,
-            stylesheets = stylesheets,
-            round_sheets = Manager.roundSheets(d, stylesheets),
+            stylesheets = linked,
+            round_sheets = round_sheets,
             fonts = settings.fonts,
             user_font = user_font,
             css_families = user_font and Manager.cssFamilies(d, stylesheets) or nil,

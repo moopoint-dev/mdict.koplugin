@@ -1545,7 +1545,10 @@
     done(opId, { box: box, playing: !!playing });
   };
 
-  MDict.ping = function (opId) { measureViewport(); done(opId, { ok: true, w: state.W, h: state.H, dpr: state.dpr }); };
+  MDict.ping = function (opId) {
+    measureViewport();
+    done(opId, { ok: true, w: state.W, h: state.H, dpr: state.dpr, round: HAS_ROUND });
+  };
 
   window.MDict = MDict;
   measureViewport();

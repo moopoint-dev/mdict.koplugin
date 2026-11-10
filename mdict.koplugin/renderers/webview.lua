@@ -345,6 +345,8 @@ function WebRenderer:document(doc, w, h, avoid)
     local t = monotonic()
     for _ = 1, 20 do
         local r = self:op(slot.id, "ping", {}, 2)
+        -- whether the WebView has CSS round() (see Manager.documentSheets)
+        if r and type(r.round) == "boolean" then self.has_round = r.round end
         if r and math.abs(r.w * r.dpr - w) <= 2 and math.abs(r.h * r.dpr - h) <= 2 then
             slot.dpr = r.dpr
             slot.trace.ping = ms(t)

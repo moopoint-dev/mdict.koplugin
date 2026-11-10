@@ -38,6 +38,34 @@ describe("document", function()
         assert.are_not.equal(ka, kb)
     end)
 
+    it("links saved copies of round() stylesheets for a WebView without round()", function()
+        local helper = require("spec.helper")
+        local fs = require("mdict/fs")
+        local Manager = require("renderers/manager")
+        local res = helper.tmpdir("unround")
+        fs.writeAtomic(res .. "/css/a.css", ".a{line-height:round(nearest, 1.5em, 1px);background:url(../img/x.png)}")
+        fs.writeAtomic(res .. "/b.css", ".b{color:red}")
+        local d = { res_dir = res, resource = function(_, p) return fs.isFile(res .. "/" .. p) and res .. "/" .. p or nil end }
+        local sheets = { "css/a.css", "b.css" }
+        -- not known yet (the renderer's first document), or the WebView has round(): the pager rewrites
+        local linked, marked = Manager.documentSheets({}, d, sheets)
+        assert.same(sheets, linked)
+        assert.same({ ["css/a.css"] = true }, marked)
+        linked, marked = Manager.documentSheets({ has_round = true }, d, sheets)
+        assert.same(sheets, linked)
+        -- without round(): a rewritten copy next to the sheet, so its url()s resolve the same
+        linked, marked = Manager.documentSheets({ has_round = false }, d, sheets)
+        assert.same({ "css/a.mdict-unround.css", "b.css" }, linked)
+        assert.same({}, marked)
+        assert.equal(".a{line-height:calc( 1.5em);background:url(../img/x.png)}",
+            fs.readAll(res .. "/css/a.mdict-unround.css"))
+        -- made again when the sheet changes
+        fs.writeAtomic(res .. "/css/a.css", ".a{line-height:round(2em, 1px)}")
+        os.execute("touch -d '+1 minute' '" .. res .. "/css/a.css'")
+        Manager.documentSheets({ has_round = false }, d, sheets)
+        assert.equal(".a{line-height:calc(2em)}", fs.readAll(res .. "/css/a.mdict-unround.css"))
+    end)
+
     it("finds the font families a stylesheet uses", function()
         local fam = Document.cssFamilies([[
             /* font-family: "Commented Out"; */

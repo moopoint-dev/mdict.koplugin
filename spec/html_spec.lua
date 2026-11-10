@@ -9,6 +9,20 @@ describe("html", function()
         assert.equal("plain", Html.applyStyleSheet("plain", styles))
     end)
 
+    it("rewrites round() as calc(), as the pager does", function()
+        assert.equal(".a{--line:calc( 1.5em)}", Html.unround(".a{--line:round(nearest, 1.5em, 1px)}"))
+        assert.equal(".a{line-height:calc(calc(1em) + 2px)}", Html.unround(".a{line-height:calc(ROUND(up,1em,1px) + 2px)}"))
+        assert.equal("x{a:calc(1.5em);b:calc(2px)}", Html.unround("x{a:round(1.5em, 1px);b:round(2px)}"))
+        -- nested, and a parenthesis inside a string
+        assert.equal("x{a:calc( calc(calc(2px) + 1em))}",
+            Html.unround("x{a:round(to-zero, calc(round(2px) + 1em), 1px)}"))
+        assert.equal('x{a:calc(var(--a, ")"))}', Html.unround('x{a:round(var(--a, ")"), 1px)}'))
+        -- other names that end in "round", and an unclosed call, stay as they are
+        local same = ".around(x){} .a{--x-round(1px);_round(2px)} .b{line-height:1.5}"
+        assert.equal(same, Html.unround(same))
+        assert.equal("x{a:calc(1px)} y{b:round(2px", Html.unround("x{a:round(1px)} y{b:round(2px"))
+    end)
+
     it("extracts unique stylesheets", function()
         local html, hrefs = Html.extractStylesheets(
             '<link rel="stylesheet" href="a.css"/><p>x</p><LINK REL=stylesheet HREF=a.css><link rel="icon" href="i.png">')

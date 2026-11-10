@@ -232,6 +232,54 @@ function Html.cssRefs(css)
     return refs
 end
 
+local ROUND_STRATEGIES = { nearest = true, up = true, down = true, ["to-zero"] = true }
+
+--- CSS with each round(<strategy>?, A, <step>?) written as calc(A), for WebViews before
+-- Chromium 125 (no round(): a declaration using it is dropped). As the pager's unround(),
+-- which does it in the page; a stylesheet is rewritten here once, and saved (see
+-- Manager.unroundedSheet), instead of in every page that loads it.
+function Html.unround(css)
+    local out, from, pos, n = {}, 1, 1, #css
+    while true do
+        local s = css:find("[Rr][Oo][Uu][Nn][Dd]%(", pos)
+        if not s then break end
+        local prev = s > 1 and css:byte(s - 1) or nil
+        if prev and (prev == 45 or prev == 95 or (prev < 128 and string.char(prev):find("%w"))) then
+            pos = s + 6 -- part of another name ("around(", "--x-round(")
+        else
+            local open = s + 5
+            local depth, args, start, stop, quote = 0, {}, open + 1, nil, nil
+            local i = open
+            while i <= n do
+                local c = css:byte(i)
+                if quote then
+                    if c == 92 then i = i + 1 elseif c == quote then quote = nil end
+                elseif c == 34 or c == 39 then
+                    quote = c
+                elseif c == 40 then
+                    depth = depth + 1
+                elseif c == 41 then
+                    depth = depth - 1
+                    if depth == 0 then stop = i; break end
+                elseif c == 44 and depth == 1 then
+                    args[#args + 1] = css:sub(start, i - 1)
+                    start = i + 1
+                end
+                i = i + 1
+            end
+            if not stop then break end -- not closed: the rest stays as it is
+            args[#args + 1] = css:sub(start, stop - 1)
+            local strategy = args[1]:match("^%s*(.-)%s*$"):lower()
+            local value = (#args > 1 and ROUND_STRATEGIES[strategy]) and args[2] or args[1]
+            out[#out + 1] = css:sub(from, s - 1)
+            out[#out + 1] = "calc(" .. Html.unround(value) .. ")"
+            from, pos = stop + 1, stop + 1
+        end
+    end
+    out[#out + 1] = css:sub(from)
+    return table.concat(out)
+end
+
 --- Resource path as the WebView requests it (relative to the dictionary root), from a reference.
 function Html.resourcePath(ref, base_dir)
     local p = ref:gsub("^[Ff][Ii][Ll][Ee]://", ""):gsub("[?#].*$", ""):gsub("\\", "/")
