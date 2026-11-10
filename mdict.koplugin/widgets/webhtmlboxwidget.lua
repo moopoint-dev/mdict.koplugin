@@ -319,12 +319,19 @@ function WebHtmlBoxWidget:_links()
     return self.links_cache[n]
 end
 
+-- How far from a link a tap may land and still be for it: 2.5 mm. A fingertip is wider than a
+-- small link: taps on the right of 新明解国語辞典's pronunciation icons (an em wide) landed a few
+-- pixels past them on a Clear7 and turned to the previous result instead.
+WebHtmlBoxWidget.LINK_REACH_MM = 2.5
+
+function WebHtmlBoxWidget:_linkReach()
+    local ok, Device = pcall(require, "device")
+    local dpi = ok and Device.screen and Device.screen.getDPI and Device.screen:getDPI() or 160
+    return dpi * WebHtmlBoxWidget.LINK_REACH_MM / 25.4
+end
+
 function WebHtmlBoxWidget:getLinkByPosition(pos)
-    for _, link in ipairs(self:_links()) do
-        if pos.x >= link.x0 and pos.x < link.x1 and pos.y >= link.y0 and pos.y < link.y1 then
-            return link
-        end
-    end
+    return require("renderers/webview").linkAt(self:_links(), pos.x, pos.y, self:_linkReach())
 end
 
 function WebHtmlBoxWidget:onTapText(arg, ges)
@@ -334,10 +341,10 @@ function WebHtmlBoxWidget:onTapText(arg, ges)
         return
     end
     if not G_reader_settings:isFalse("tap_to_follow_links") then
-        local link = self:getLinkByPosition(pos)
+        local link, away = self:getLinkByPosition(pos)
         -- (for reports of taps that missed: where it was, and what the page's links are)
         logger.info(string.format("MDict: tap at %d,%d on page %d: %s", math.floor(pos.x), math.floor(pos.y), self.page_number,
-            link and ("link " .. tostring(link.uri))
+            link and ("link " .. tostring(link.uri) .. (away and away > 0 and string.format(" (%d px away)", math.floor(away + 0.5)) or ""))
             or ("no link (" .. #(self.links_cache[self.page_number] or {}) .. " on the page)")))
         if link then
             -- a place in the same entry (bword://#x: one written as entry://#x elsewhere)

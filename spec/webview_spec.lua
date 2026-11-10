@@ -235,6 +235,23 @@ describe("webview renderer", function()
         assert.equal("timeout", err)
     end)
 
+    it("gives a tap the link it is on, else the nearest one within reach", function()
+        local icon = { x0 = 940, y0 = 200, x1 = 958, y1 = 236, uri = "mdict-sound://a.aac" }
+        local word = { x0 = 700, y0 = 200, x1 = 740, y1 = 260, uri = "bword://x" }
+        local links = { word, icon }
+        assert.equal(icon, (WebRenderer.linkAt(links, 950, 210, 30)))
+        -- a few pixels past the icon's right edge: still the icon, with how far
+        local l, d = WebRenderer.linkAt(links, 964, 216, 30)
+        assert.equal(icon, l)
+        assert.is_true(d > 5 and d < 7)
+        -- too far, or no reach: nothing
+        assert.is_nil(WebRenderer.linkAt(links, 1000, 216, 30))
+        assert.is_nil(WebRenderer.linkAt(links, 964, 216, 0))
+        -- between two links, the nearer one
+        assert.equal(word, (WebRenderer.linkAt({ icon, word }, 745, 230, 30)))
+        assert.is_nil(WebRenderer.linkAt(nil, 1, 1, 30))
+    end)
+
     it("wakes its caller once, outside the bridge's session, while waiting", function()
         local bridge = fake_bridge()
         bridge.lag = 3

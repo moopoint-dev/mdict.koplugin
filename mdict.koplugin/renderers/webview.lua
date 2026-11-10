@@ -436,6 +436,22 @@ function WebRenderer:renderPage(slot, n, ptr)
 end
 
 function WebRenderer:links(slot) return self:op(slot.id, "links") end
+
+--- The link a tap at (x, y) is for, from a page's links ({ x0, y0, x1, y1, uri }...): one the tap
+-- is on, else the nearest one at most `reach` away (a fingertip is wider than a small link,
+-- such as a pronunciation icon an em wide). Returns the link and its distance, or nil.
+function WebRenderer.linkAt(links, x, y, reach)
+    local best, best_d
+    for _, link in ipairs(links or {}) do
+        local dx = math.max(link.x0 - x, 0, x - link.x1)
+        local dy = math.max(link.y0 - y, 0, y - link.y1)
+        local inside = x >= link.x0 and x < link.x1 and y >= link.y0 and y < link.y1
+        local d = inside and 0 or math.sqrt(dx * dx + dy * dy)
+        if d == 0 then return link, 0 end
+        if d <= (reach or 0) and (not best_d or d < best_d) then best, best_d = link, d end
+    end
+    return best, best_d
+end
 function WebRenderer:textAt(slot, x0, y0, x1, y1) return self:op(slot.id, "textAt", { x0 = x0, y0 = y0, x1 = x1, y1 = y1 }) end
 function WebRenderer:find(slot, term) return self:op(slot.id, "find", { term = term }) end
 function WebRenderer:pageOfAnchor(slot, id) return self:op(slot.id, "pageOfAnchor", { id = id }) end
