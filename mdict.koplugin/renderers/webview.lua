@@ -45,6 +45,7 @@ function WebRenderer.new(opts)
         slots = {},
         next_id = 0,
         events = {},
+        serving = 0, -- seconds spent extracting resources the WebView asked for (see _wait)
         jobs = {}, -- coroutine -> job
         clock = 0,
         -- a slow backend (the Kindle's browser) can ask for more time
@@ -81,9 +82,11 @@ function WebRenderer:_dispatch(raw)
             if rok then file = res else self:_log("warn", "resolve failed", ev.path, res) end
         end
         self.bridge:provide(ev.rid, file or "")
+        local dt = monotonic() - t0
+        self.serving = self.serving + dt
         if slot and slot.trace then
             slot.trace.needs = (slot.trace.needs or 0) + 1
-            slot.trace.need_ms = (slot.trace.need_ms or 0) + (monotonic() - t0) * 1000
+            slot.trace.need_ms = (slot.trace.need_ms or 0) + dt * 1000
         end
         return nil
     end
@@ -123,12 +126,21 @@ end
 --- Waits for an event matching pred(ev), serving resource requests meanwhile.
 -- Returns the event, or nil and "timeout". In a background job, it yields between
 -- polls (and raises CANCELLED once the job is cancelled and nothing is pending).
+-- Time spent extracting resources does not count: the WebView waits for them, and an entry
+-- that needs hundreds of fonts not extracted yet (dictionaries that embed font subsets) took
+-- longer than the timeout on an e-reader, which then gave up on the WebView.
 function WebRenderer:_wait(pred, timeout)
     local deadline = monotonic() + timeout
     local job = self:_job()
     local function result(ev, err)
         if job and job.cancelled then error(WebRenderer.CANCELLED, 0) end
         return ev, err
+    end
+    local function offer(raw)
+        local served = self.serving
+        local e, fatal = self:_offer(raw, pred)
+        deadline = deadline + (self.serving - served)
+        return e, fatal
     end
     local stored = self:_stored(pred)
     if stored then return result(stored) end
@@ -137,7 +149,7 @@ function WebRenderer:_wait(pred, timeout)
             while true do
                 local raw = self.bridge:poll(0)
                 if not raw then return nil end
-                local e, fatal = self:_offer(raw, pred)
+                local e, fatal = offer(raw)
                 if e or fatal then return e, fatal end
             end
         end)
@@ -153,7 +165,7 @@ function WebRenderer:_wait(pred, timeout)
             if left <= 0 then return nil, "timeout" end
             local raw = self.bridge:poll(math.max(1, math.min(100, math.floor(left * 1000))))
             if raw then
-                local ev, err = self:_offer(raw, pred)
+                local ev, err = offer(raw)
                 if ev or err then return ev, err end
             end
         end

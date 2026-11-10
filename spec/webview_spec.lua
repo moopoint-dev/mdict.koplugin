@@ -233,4 +233,30 @@ describe("webview renderer", function()
         local _, err = wr:op(1, "ping", {}, 0.05)
         assert.equal("timeout", err)
     end)
+
+    it("does not count the time spent extracting resources toward the timeout", function()
+        local bridge = fake_bridge()
+        local now = require("mdict/clock")
+        -- each extraction takes 30 ms, and the op asks for five before it is done
+        local wr = WebRenderer.new({ bridge = bridge, resolve = function(_, path)
+            local t = now() + 0.03
+            while now() < t do end
+            return "/c/" .. path
+        end })
+        bridge.call = function(_, slot, id)
+            for rid = 1, 5 do
+                bridge.queue[#bridge.queue + 1] = { raw = json.encode({ ev = "need", slot = slot, rid = rid,
+                    path = "f" .. rid .. ".otf" }), ready = 0 }
+            end
+            bridge.queue[#bridge.queue + 1] = { raw = json.encode({ ev = "done", slot = slot, id = id, r = {} }),
+                ready = 0 }
+        end
+        bridge.provide = function(_, rid, path) bridge.provided[rid] = path end
+        wr.slots[1] = { id = 1, dict_id = "d" }
+        local r, err = wr:op(1, "setEntry", {}, 0.1)
+        assert.is_nil(err)
+        assert.truthy(r)
+        assert.equal("/c/f5.otf", bridge.provided[5])
+        assert.is_true(wr.serving >= 0.15)
+    end)
 end)

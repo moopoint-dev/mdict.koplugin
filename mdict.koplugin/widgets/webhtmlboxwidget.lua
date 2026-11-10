@@ -63,7 +63,11 @@ function WebHtmlBoxWidget:_layout()
     if not slot then return nil, err end
     local info
     info, err = self.renderer:setEntry(slot, self.entry)
-    if not info then return nil, err end
+    if not info then
+        -- (the pager may still be busy with it: the next use loads the document again)
+        slot.key, slot.ready = nil, false
+        return nil, err
+    end
     self.trace = self.trace or slot.trace
     slot.owner = self
     self.slot, self.slot_key = slot, slot.key
@@ -245,10 +249,13 @@ function WebHtmlBoxWidget:_timingText(page)
     for _, k in ipairs({ "open", "load", "ping" }) do
         if t[k] then doc[#doc + 1] = k .. " " .. t[k] end
     end
-    local text = string.format("MDict: %s laid out in %d ms%s: document %d%s, entry %d%s",
+    -- (the pager's own total for the entry: the rest of `entry` is the WebView's other work,
+    -- such as styling a new document, before the pager gets to run)
+    local js = type(t.entry_js) == "table" and tonumber(t.entry_js.total)
+    local text = string.format("MDict: %s laid out in %d ms%s: document %d%s, entry %d%s%s",
         self.label or "entry", t.total or 0, self.background and " (ahead)" or "",
         t.doc or 0, #doc > 0 and " (" .. table.concat(doc, ", ") .. ")" or "",
-        t.entry or 0, marks(t.entry_js))
+        t.entry or 0, js and string.format(" (pager %d)", js) or "", marks(t.entry_js))
     if t.needs then
         text = text .. string.format(", %d resources in %.0f", t.needs, t.need_ms or 0)
     end

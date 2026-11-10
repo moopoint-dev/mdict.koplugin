@@ -16,6 +16,8 @@ local Manager = {
     failed = nil, -- reason the renderer is unavailable for this session
     notified = false,
     vertical_seen = {}, -- dictionary id -> whether its last entry was vertical
+    timeouts = 0, -- entries in a row the WebView did not lay out in time (see Manager.widget)
+    MAX_TIMEOUTS = 2,
 }
 
 local function plugin_dir()
@@ -479,12 +481,19 @@ function Manager.widget(state, dql, r, opts)
         if opts.background then return nil, err end
         logger.warn("MDict: WebView could not show the entry:", err)
         local b = renderer.bridge
-        if err == "timeout" or (err and err:find("^open")) or (err and err:find("^load"))
-            or (b.alive and not b:alive()) then
+        local timed_out = err and err:find("timeout", 1, true)
+        if (b.alive and not b:alive()) or (err and not timed_out and (err:find("^open") or err:find("^load"))) then
             Manager.disable(err)
+        elseif timed_out then
+            -- An entry that took too long (a heavy page, fonts extracted for the first time) is
+            -- shown by MuPDF; the WebView is given up for the session only when the next one times
+            -- out too. (Giving up at once left every later entry to MuPDF.)
+            Manager.timeouts = Manager.timeouts + 1
+            if Manager.timeouts >= Manager.MAX_TIMEOUTS then Manager.disable(err) end
         end
         return nil
     end
+    Manager.timeouts = 0
     return widget
 end
 
