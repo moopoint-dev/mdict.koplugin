@@ -244,11 +244,12 @@ function Integration.prepareStatic(r, d, font_size)
     end
 end
 
---- The wrapped showDict: restores MDict fields, prepares MuPDF resources when needed.
+--- The wrapped showDict: restores MDict fields. Results MuPDF shows are readied for it one
+-- at a time, when shown (see installWidgetHooks): readying all of them first extracted the
+-- resources of every dictionary that answered, and built and scaled each one's stylesheets.
 function Integration.prepareResults(results)
     if not results then return end
     local lib = Integration.state.library
-    local static = not (Integration.state.renderer and Integration.state.renderer())
     for _, r in ipairs(results) do
         if r.mdict then
             local d = lib:byId(r.mdict.id)
@@ -256,7 +257,6 @@ function Integration.prepareResults(results)
             if d then
                 r.dictionary_resource_directory = d.res_dir
                 r.css = d:userCss()
-                if static then Integration.prepareStatic(r, d) end
             end
         end
     end

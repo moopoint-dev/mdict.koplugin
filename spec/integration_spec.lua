@@ -85,9 +85,14 @@ describe("integration", function()
         assert.equal(1, #r)
         assert.is_true(r[1].is_html)
         assert.equal(lib:byTitle("Basic Test").res_dir, r[1].dictionary_resource_directory)
+        -- readied for MuPDF only when shown, one result at a time
+        assert.is_nil(r[1].mdict_static)
+        local dql = DictQuickLookup:new({ results = r })
+        assert.equal("html", dql.text_widget.kind)
         -- MuPDF needs the resources up front when no other renderer is active
         assert.truthy(require("mdict/fs").isFile(lib:byTitle("Basic Test").res_dir .. "/basic.css"))
         -- and the entry's stylesheet in its CSS: MuPDF does not read the <link> in the entry
+        assert.truthy(dql.css:find(".hw{font-weight:bold}", 1, true))
         assert.truthy(r[1].css:find(".hw{font-weight:bold}", 1, true))
     end)
 

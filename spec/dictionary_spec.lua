@@ -97,6 +97,11 @@ describe("dictionary", function()
         -- nothing in it can close the element early
         assert.equal('\n</style><style>\n.a::after{content:"<\\/b>"}\n',
             d:staticCss('<style>.a::after{content:"</b>"}</style>'))
+        -- font subsets limited to a unicode-range are left out (and not extracted)
+        local ranged = d:staticCss('<style>@font-face{font-family:"A";src:url(fonts/t.ttf)}'
+            .. '@font-face { font-family:"B"; src:url(img/icon.png); Unicode-Range:U+4E00-4E10 }.c{font-family:B}</style>')
+        assert.equal('\n</style><style>\n@font-face{font-family:"A";src:url("fonts/t.ttf")}.c{font-family:B}\n', ranged)
+        assert.equal(".x{}", Dictionary.dropRangedFontFaces("@font-face{src:url(a.otf);unicode-range:U+0-FF}.x{}"))
         -- lengths scaled to the popup, the stylesheet's once for each scale
         assert.equal("\n</style><style>\n.a{margin:3px}\n", d:staticCss("<style>.a{margin:2px}</style>", 1.5))
         css = d:staticCss('<link rel="stylesheet" href="basic.css"><style>.b{margin:1px}</style>', 2)

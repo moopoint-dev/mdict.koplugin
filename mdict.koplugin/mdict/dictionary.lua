@@ -486,6 +486,17 @@ function Dictionary:resource(path)
     return target
 end
 
+-- A stylesheet without its @font-face rules that are limited to a unicode-range, for MuPDF.
+-- MuPDF has no unicode-range, and loads the font of every @font-face rule when it reads a
+-- stylesheet. Dictionaries made for browsers can split their fonts into subsets of a few
+-- characters each (one has 4,000 such rules naming 1,200 font files, 128 MB): MuPDF would
+-- load them all for each entry, and use only the first subset of each family.
+function Dictionary.dropRangedFontFaces(css)
+    return (css:gsub("@[Ff][Oo][Nn][Tt]%-[Ff][Aa][Cc][Ee]%s*(%b{})", function(body)
+        if body:lower():find("unicode%-range") then return "" end
+    end))
+end
+
 --- Extracts what a static renderer (MuPDF) needs up front: the entry's stylesheets,
 -- what they reference, and the entry's own images. Returns the resource directory.
 -- Extracts a stylesheet and what it refers to, following @import chains.
@@ -495,7 +506,7 @@ function Dictionary:_prefetchCss(p, depth)
     local file = self:resource(p)
     if not file then return end
     local base = p:match("^(.*)/[^/]*$") or ""
-    for _, ref in ipairs(Html.cssRefs(fs.readAll(file) or "")) do
+    for _, ref in ipairs(Html.cssRefs(Dictionary.dropRangedFontFaces(fs.readAll(file) or ""))) do
         local rp = Html.resourcePath(ref, base)
         if rp:lower():match("%.css$") then self:_prefetchCss(rp, depth + 1) else self:resource(rp) end
     end
@@ -515,6 +526,7 @@ end
 -- base: the stylesheet's folder, relative to the root; stack: the sheets being inlined.
 function Dictionary:_inlineCss(css, base, stack)
     css = css:gsub("^\239\187\191", ""):gsub("/%*.-%*/", ""):gsub("^%s*<!%-%-", ""):gsub("%-%->%s*$", "")
+    css = Dictionary.dropRangedFontFaces(css)
     -- imported sheets go in once this one's url()s are rewritten: theirs are relative to the root already
     local imported = {}
     local function import(ref)
