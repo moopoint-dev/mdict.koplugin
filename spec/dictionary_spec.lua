@@ -122,9 +122,11 @@ describe("dictionary", function()
         assert.equal("sidecar", d:indexStates()[1].state)
         d:close()
         assert.equal("sidecar", d:storedIndexState())
-        assert.is_nil(open("multi.mdx"):storedIndexState())
-        -- a sorted file keeps no sidecar, only a verdict
-        local s = open("basic.mdx")
+        assert.is_nil(Dictionary.new({ path = fx .. "/multi.mdx", cache_dir = helper.tmpdir("unprepared") })
+            :storedIndexState())
+        -- a sorted file keeps no sidecar, only a verdict (a fresh cache: the earlier tests
+        -- indexed basic.mdx in memory, which left a verdict already)
+        local s = open("basic.mdx", { cache_dir = helper.tmpdir("sortedcache") })
         local job
         s.builder = function(j, done) job = j; Dictionary.buildIndexJob(j); done(true) end
         assert.is_nil(s:lookup("Apple"))
@@ -135,6 +137,52 @@ describe("dictionary", function()
         Dictionary.MEMORY_INDEX_MAX = old
         d:close()
         s:close()
+    end)
+
+    it("remembers what indexing a small file in memory found", function()
+        -- in kosort-1 order: a verdict, and the next session searches the file's own order
+        local dir = helper.tmpdir("smallsorted")
+        local py = os.getenv("MDICT_PYTHON") or "python3"
+        local f = io.open(dir .. "/gen.py", "w")
+        f:write(string.format([[
+import sys; sys.path.insert(0, '%s/tools')
+import mkmdx, kosort
+items = sorted(mkmdx.basic_entries().items(), key=lambda kv: kosort.sort_key(kv[0]))
+mkmdx.write('%s/ko.mdx', items, sort=False, key_block_bytes=2048)
+]], helper.root, dir))
+        f:close()
+        assert.is_truthy(os.execute(py .. " " .. dir .. "/gen.py"))
+        local c = helper.tmpdir("smallcache")
+        local jobs = {}
+        local builder = function(job, done) jobs[#jobs + 1] = { job, done } end
+        local d = Dictionary.new({ path = dir .. "/ko.mdx", cache_dir = c, builder = builder })
+        assert.equal("Apple", assert(d:lookup("Apple"))[1].key)
+        assert.equal("memory", d:indexStates()[1].state)
+        d:close()
+        assert.equal("file-order", d:storedIndexState())
+        assert.equal("Apple", assert(d:lookup("apple"))[1].key)
+        assert.equal("file-order", d:indexStates()[1].state)
+        d:close()
+        assert.equal(0, #jobs)
+        -- out of order: answers from memory now, and a sidecar is built for the next session
+        local u = Dictionary.new({ path = fx .. "/unsorted.mdx", cache_dir = c, builder = builder })
+        assert.equal("Apple", assert(u:lookup("Apple"))[1].key)
+        assert.equal("memory", u:indexStates()[1].state)
+        assert.equal(1, #jobs)
+        Dictionary.buildIndexJob(jobs[1][1])
+        jobs[1][2](true)
+        assert.equal("Apple", assert(u:lookup("Apple"))[1].key)
+        assert.equal("sidecar", u:indexStates()[1].state)
+        u:close()
+        -- a failed build is not asked for again in the session
+        local c2 = helper.tmpdir("smallcache2")
+        jobs = {}
+        u = Dictionary.new({ path = fx .. "/unsorted.mdx", cache_dir = c2, builder = builder })
+        assert.truthy(u:lookup("Apple"))
+        jobs[1][2](false)
+        assert.truthy(u:lookup("Apple"))
+        assert.equal(1, #jobs)
+        u:close()
     end)
 end)
 

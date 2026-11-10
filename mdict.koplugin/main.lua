@@ -162,7 +162,9 @@ function MDict.checkRebuilt()
     UIManager:show(Notification:new{ text = _("MDict: indexes rebuilt.") })
 end
 
---- Opens each dictionary once in the background so missing indexes start building.
+--- Opens each dictionary once in the background so missing indexes start building. They stay
+-- open: the first lookup asks every enabled dictionary, and opening them all then (reading
+-- their block tables, indexing small ones in memory) took seconds on an e-reader.
 -- on_queued: called once every dictionary has been opened (its builds queued).
 function MDict.prepareIndexes(on_queued)
     local dicts = {}
@@ -179,7 +181,6 @@ function MDict.prepareIndexes(on_queued)
         end
         local ok, err = pcall(d.prepareIndexes, d)
         if not ok then logger.warn("MDict: cannot open", d.path, err) end
-        if not d.recently_used then d:close() end
         UIManager:scheduleIn(0.2, step)
     end
     step()

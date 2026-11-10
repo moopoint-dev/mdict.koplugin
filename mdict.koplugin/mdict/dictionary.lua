@@ -140,7 +140,21 @@ function Dictionary:_openIndex(f)
         end
     end
     if reader.num_entries <= Dictionary.MEMORY_INDEX_MAX then
-        f.index, f.state = Index.buildMemory(reader, spec), "memory"
+        local idx = Index.buildMemory(reader, spec)
+        f.index, f.state = idx, "memory"
+        -- An .mdx is indexed in memory again in every session, normalising every key (up to a
+        -- second each on an e-reader): what this pass found spares the next ones. A sorted file
+        -- is then searched in its own order; another gets a sidecar, built in the background.
+        if not reader.is_mdd and not (v and v.spec == spec and v.size == size and v.mtime == mtime
+                and v.keys == reader.num_entries) then
+            if idx.inversions == 0 then
+                Dictionary.writeVerdict(verdict_path, { spec = spec, size = size, mtime = mtime,
+                    keys = reader.num_entries, sorted = true, inversions = 0 })
+            elseif not f.build_failed then
+                self:_requestBuild(f, spec)
+                f.state = "memory"
+            end
+        end
         return f.index
     end
     if reader.header[Dictionary.KEY_ORDER_ATTR] == spec and Index.boundariesOrdered(reader, spec) then
@@ -166,12 +180,12 @@ function Dictionary:_requestBuild(f, spec)
         self.builder(job, function(ok)
             f.building = false
             f.index = nil
-            if not ok then f.state = "index failed" end
+            if not ok then f.state, f.build_failed = "index failed", true end
         end)
     else
         local ok = pcall(Dictionary.buildIndexJob, job)
         f.building = false
-        if not ok then f.state = "index failed" end
+        if not ok then f.state, f.build_failed = "index failed", true end
     end
 end
 
