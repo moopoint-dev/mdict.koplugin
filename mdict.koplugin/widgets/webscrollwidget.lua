@@ -232,6 +232,8 @@ function WebScrollWidget:onScrollText(arg, ges)
     elseif ges.direction == "north" or ges.direction == "south" then
         local dialog = self.dialog
         if dialog and dialog.onChangeToNextDict then
+            require("logger").info("MDict: swipe", ges.direction, "in a vertical entry: another result",
+                ges.distance and ("(" .. math.floor(ges.distance) .. " px)") or "")
             if ges.direction == "north" then dialog:onChangeToNextDict() else dialog:onChangeToPrevDict() end
             return true
         end
@@ -257,12 +259,14 @@ function WebScrollWidget:onTapScrollText(arg, ges)
     if forward then
         if self:onScrollDown() then return true end
         if dialog and dialog.onReadNextResult then
+            require("logger").info("MDict: tap past the last page: the next result")
             dialog:onReadNextResult()
             return true
         end
     else
         if self:onScrollUp() then return true end
         if dialog and dialog.onReadPrevResult then
+            require("logger").info("MDict: tap before the first page: the previous result")
             dialog:onReadPrevResult()
             return true
         end

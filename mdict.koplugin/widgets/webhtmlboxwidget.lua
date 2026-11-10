@@ -308,7 +308,13 @@ function WebHtmlBoxWidget:_links()
         if not self:_ensure() then return {} end
         local ok = self.renderer:op(self.slot.id, "showPage", { page = n - 1 })
         self.slot.page = ok and ok.page or nil
-        self.links_cache[n] = self.renderer:links(self.slot) or {}
+        local links, err = self.renderer:links(self.slot)
+        if not links then
+            -- not kept: a page whose links could not be read once would ignore taps on them
+            logger.warn("MDict: cannot read the links of page", n, err)
+            return {}
+        end
+        self.links_cache[n] = links
     end
     return self.links_cache[n]
 end
@@ -323,9 +329,16 @@ end
 
 function WebHtmlBoxWidget:onTapText(arg, ges)
     local pos = self:getPosFromAbsPos(ges.pos)
-    if not pos then return end
+    if not pos then
+        logger.info("MDict: tap outside the entry at", ges.pos.x, ges.pos.y)
+        return
+    end
     if not G_reader_settings:isFalse("tap_to_follow_links") then
         local link = self:getLinkByPosition(pos)
+        -- (for reports of taps that missed: where it was, and what the page's links are)
+        logger.info(string.format("MDict: tap at %d,%d on page %d: %s", math.floor(pos.x), math.floor(pos.y), self.page_number,
+            link and ("link " .. tostring(link.uri))
+            or ("no link (" .. #(self.links_cache[self.page_number] or {}) .. " on the page)")))
         if link then
             -- a place in the same entry (bword://#x: one written as entry://#x elsewhere)
             local anchor = link.uri and (link.uri:match("^#(.+)$") or link.uri:match("^bword://#(.+)$"))
