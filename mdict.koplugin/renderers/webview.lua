@@ -31,6 +31,18 @@ local monotonic = require("mdict/clock")
 
 WebRenderer.clock = monotonic
 
+-- Wall clock in milliseconds, to compare with the page's Date.now() (the clock module has
+-- declared clock_gettime and struct timespec).
+local wall_ms
+do
+    local ffi = require("ffi")
+    local ts = ffi.new("struct timespec")
+    wall_ms = function()
+        if ffi.C.clock_gettime(0, ts) ~= 0 then return nil end -- CLOCK_REALTIME
+        return tonumber(ts.tv_sec) * 1000 + tonumber(ts.tv_nsec) / 1e6
+    end
+end
+
 --- opts: bridge (required), resolve(dict_id, path) -> file path or nil,
 --        logger (optional, with :dbg/:warn), max_slots,
 --        schedule(seconds, fn) and unschedule(fn) for background jobs
@@ -350,6 +362,7 @@ end
 -- Returns { pages, vertical, mode, anchorPage, width, height } or nil, err.
 function WebRenderer:setEntry(slot, entry)
     local t0 = monotonic()
+    local sent = wall_ms()
     local r, err = self:op(slot.id, "setEntry", {
         html = entry.html,
         writing = entry.writing or "auto",
@@ -366,6 +379,9 @@ function WebRenderer:setEntry(slot, entry)
         slot.trace.entry = (slot.trace.entry or 0) + ms(t0)
         slot.trace.entry_js = r and r.ms
         slot.trace.layouts = (slot.trace.layouts or 0) + 1
+        -- how long the op waited before the page ran it (the WebView busy with other work)
+        local started = r and tonumber(r.startedAt)
+        if started and sent then slot.trace.entry_queued = math.max(0, math.floor(started - sent + 0.5)) end
     end
     return r, err
 end

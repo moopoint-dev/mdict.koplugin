@@ -1110,6 +1110,8 @@
   var MDict = {};
 
   MDict.setEntry = function (opId) {
+    // (wall clock, for the log: how long the op waited before the page ran it)
+    var startedAt = Date.now();
     var opts;
     try { opts = arg(opId); } catch (e) { return fail(opId, e); }
     (async function () {
@@ -1161,7 +1163,7 @@
       if (opts.anchor) anchorPage = pageOfElement(findAnchor(opts.anchor));
       t.mark("anchor");
       done(opId, { pages: state.pages, vertical: vertical, mode: state.mode, anchorPage: anchorPage,
-                   scripts: state.scripts, ms: t.done(),
+                   scripts: state.scripts, ms: t.done(), startedAt: startedAt, doneAt: Date.now(),
                    width: Math.round(state.W * state.dpr), height: Math.round(state.H * state.dpr) });
     })().catch(function (e) { fail(opId, e); });
   };

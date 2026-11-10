@@ -252,10 +252,13 @@ function WebHtmlBoxWidget:_timingText(page)
     -- (the pager's own total for the entry: the rest of `entry` is the WebView's other work,
     -- such as styling a new document, before the pager gets to run)
     local js = type(t.entry_js) == "table" and tonumber(t.entry_js.total)
+    local inner = {}
+    if js then inner[#inner + 1] = "pager " .. js end
+    if t.entry_queued then inner[#inner + 1] = "queued " .. t.entry_queued end
     local text = string.format("MDict: %s laid out in %d ms%s: document %d%s, entry %d%s%s",
         self.label or "entry", t.total or 0, self.background and " (ahead)" or "",
         t.doc or 0, #doc > 0 and " (" .. table.concat(doc, ", ") .. ")" or "",
-        t.entry or 0, js and string.format(" (pager %d)", js) or "", marks(t.entry_js))
+        t.entry or 0, #inner > 0 and " (" .. table.concat(inner, ", ") .. ")" or "", marks(t.entry_js))
     if t.needs then
         text = text .. string.format(", %d resources in %.0f", t.needs, t.need_ms or 0)
     end
