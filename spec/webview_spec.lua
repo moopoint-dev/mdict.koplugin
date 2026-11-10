@@ -234,6 +234,28 @@ describe("webview renderer", function()
         assert.equal("timeout", err)
     end)
 
+    it("wakes its caller once, outside the bridge's session, while waiting", function()
+        local bridge = fake_bridge()
+        bridge.lag = 3
+        local in_session = false
+        bridge.session = function(_, fn)
+            in_session = true
+            local a, b, c = fn()
+            in_session = false
+            return a, b, c
+        end
+        local due, woke = 0, {}
+        local wr = WebRenderer.new({ bridge = bridge,
+            wake_at = function() return due end,
+            on_wake = function() woke[#woke + 1] = in_session; due = nil end })
+        local r = assert(wr:op(1, "ping", {}, 1))
+        assert.equal(575, r.w)
+        assert.same({ false }, woke)
+        -- without on_wake, wake_at is not asked
+        local plain = WebRenderer.new({ bridge = fake_bridge(), wake_at = function() error("asked") end })
+        assert.truthy(plain:op(1, "ping", {}, 1))
+    end)
+
     it("does not count the time spent extracting resources toward the timeout", function()
         local bridge = fake_bridge()
         local now = require("mdict/clock")

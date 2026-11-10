@@ -103,6 +103,8 @@ function MDict:init()
     state.dropPrefetch = function(dql) return Manager.dropPrefetch(dql) end
     state.keep = function(dql, w, r) return Manager.keep(state, dql, w, r) end
     state.stopSound = function() Manager.stopSound() end
+    state.lookupMessageDue = Integration.lookupMessageDue
+    state.showLookupMessage = Integration.showLookupMessage
     state.playSound = function(dictionary, path, sources)
         local ok, msg = Manager.playSound(state, dictionary, path, sources)
         if not ok and msg then

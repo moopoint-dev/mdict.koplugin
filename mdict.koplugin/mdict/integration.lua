@@ -129,13 +129,47 @@ function Integration.prefixLookup(targets, word, display)
     for c in word:gmatch("[%z\1-\127\194-\244][\128-\191]*") do chars[#chars + 1] = c end
     for n = math.min(#chars, Integration.MAX_PREFIX) - 1, 1, -1 do
         local prefix = table.concat(chars, "", 1, n)
-        local mres, problems = Lookup.run(targets, { prefix }, { display_word = display })
+        local mres, problems = Lookup.run(targets, { prefix }, { display_word = display,
+            tick = Integration.showLookupMessage })
         if #mres > 0 or #problems > 0 then return mres, problems end
     end
     return {}, {}
 end
 
 Integration.MAX_PREFIX = 12
+
+-- KOReader's lookup message ("Searching dictionary for: …") is shown after a delay, by its
+-- scheduler: sdcv's search gives the scheduler control while it waits, MDict's lookups and the
+-- WebView laying out the first result do not, so a lookup that took seconds there showed
+-- nothing. The plugin shows the message itself once the delay has passed (see
+-- Integration.showLookupMessage), until the popup is up.
+Integration.pending_message = nil -- { rd, msg, due }
+
+--- When the pending lookup message is due (clock time), or nil.
+function Integration.lookupMessageDue()
+    local p = Integration.pending_message
+    return p and p.due or nil
+end
+
+--- Shows KOReader's lookup message now if its delay has passed and it is still hidden.
+function Integration.showLookupMessage()
+    local p = Integration.pending_message
+    if not p or clock() < p.due then return end
+    Integration.pending_message = nil
+    local msg = p.msg
+    if not (msg and p.rd.lookup_progress_msg == msg and msg.invisible) then return end
+    local UIManager = require("ui/uimanager")
+    local ok, err = pcall(function()
+        if msg._delayed_show_action then
+            UIManager:unschedule(msg._delayed_show_action)
+            msg._delayed_show_action = nil
+        end
+        msg.invisible = false
+        msg:onShow()
+        UIManager:forceRePaint()
+    end)
+    if not ok then require("logger").warn("MDict: cannot show the lookup message:", err) end
+end
 
 --- The wrapped startSdcv.
 function Integration.startSdcv(orig, rd, word, dict_names, fuzzy_search)
@@ -154,6 +188,12 @@ function Integration.startSdcv(orig, rd, word, dict_names, fuzzy_search)
         results = {}
     end
     t_sdcv = clock() - t_sdcv
+    local msg = rd.lookup_progress_msg
+    Integration.pending_message = nil
+    if type(msg) == "table" and msg.invisible then
+        Integration.pending_message = { rd = rd, msg = msg,
+            due = Integration.lookup_started + (tonumber(rd.lookup_msg_delay) or 0.5) }
+    end
     local words = Integration.candidates(rd, word)
     local all_cjk = true
     for _, w in ipairs(words) do
@@ -163,7 +203,8 @@ function Integration.startSdcv(orig, rd, word, dict_names, fuzzy_search)
     local st = require("mdict/reader").stats
     st.key_blocks, st.record_blocks, st.bytes, st.seconds = 0, 0, 0, 0
     local t0, c0 = clock(), os.clock()
-    local mres, problems = Lookup.run(targets, words, { fuzzy = fuzzy_search and not all_cjk, display_word = display })
+    local mres, problems = Lookup.run(targets, words, { fuzzy = fuzzy_search and not all_cjk, display_word = display,
+        tick = Integration.showLookupMessage })
     if #mres == 0 and #problems == 0 and all_cjk then
         mres, problems = Integration.prefixLookup(targets, word, display)
     end
@@ -277,7 +318,9 @@ function Integration.install(state)
     ReaderDictionary.showDict = function(rd, word, results, ...)
         local ok, err = pcall(Integration.prepareResults, results)
         if not ok then require("logger").warn("MDict: preparing results failed:", err) end
-        return orig_showDict(rd, word, results, ...)
+        local a, b = orig_showDict(rd, word, results, ...)
+        Integration.pending_message = nil -- the popup is up (KOReader closed the message)
+        return a, b
     end
 
     local orig_link = ReaderDictionary.onHtmlDictionaryLinkTapped
@@ -393,6 +436,7 @@ function Integration.installWidgetHooks()
             stop_sound()
             dql.mdict_lookup_started, Integration.lookup_started = Integration.lookup_started, nil
             local a, b = orig_init(dql, ...)
+            Integration.pending_message = nil
             prefetch(dql)
             return a, b
         end

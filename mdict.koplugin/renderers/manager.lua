@@ -154,6 +154,9 @@ function Manager.get(state)
         end,
         schedule = function(seconds, fn) UIManager:scheduleIn(seconds, fn) end,
         unschedule = function(fn) UIManager:unschedule(fn) end,
+        -- KOReader's lookup message, shown while the first result is laid out once it is due
+        wake_at = state.lookupMessageDue,
+        on_wake = state.showLookupMessage,
     })
     if bridge.kindle then
         bridge.idle_close = require("renderers/kindle_browser").IDLE_CLOSE

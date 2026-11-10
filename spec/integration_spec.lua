@@ -65,6 +65,38 @@ describe("integration", function()
         assert.is_true(results[1].no_result)
     end)
 
+    it("shows KOReader's lookup message once it is due, while MDict looks words up", function()
+        local repaints = 0
+        package.loaded["ui/uimanager"] = { unschedule = function() end,
+            forceRePaint = function() repaints = repaints + 1 end }
+        local msg = { invisible = true, _delayed_show_action = function() end }
+        function msg:onShow() self.shown = true end
+        rd.lookup_progress_msg, rd.lookup_msg_delay = msg, 0
+        local ticks = 0
+        local show = Integration.showLookupMessage
+        Integration.showLookupMessage = function() ticks = ticks + 1; return show() end
+        rd:startSdcv("apples", { "Basic Test", "Multi" }, false)
+        Integration.showLookupMessage = show
+        -- after the first dictionary (with no delay it is due at once), and only once
+        assert.is_true(ticks >= 1)
+        assert.is_true(msg.shown)
+        assert.is_false(msg.invisible)
+        assert.equal(1, repaints)
+        assert.is_nil(Integration.lookupMessageDue())
+        -- not due yet: it stays pending, and nothing is shown
+        local later = { invisible = true }
+        function later:onShow() self.shown = true end
+        rd.lookup_progress_msg, rd.lookup_msg_delay = later, 60
+        rd:startSdcv("apples", { "Basic Test" }, false)
+        assert.is_nil(later.shown)
+        assert.truthy(Integration.lookupMessageDue())
+        -- the popup taking over clears it
+        rd:stardictLookup("apples", { "Basic Test" }, false)
+        assert.is_nil(Integration.lookupMessageDue())
+        rd.lookup_progress_msg, rd.lookup_msg_delay = nil, nil
+        package.loaded["ui/uimanager"] = nil
+    end)
+
     it("adds a note for dictionaries that cannot answer yet", function()
         local d = lib:byTitle("Multi")
         local orig = d.lookup

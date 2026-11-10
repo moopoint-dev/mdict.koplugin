@@ -263,12 +263,14 @@ function Lookup.trimRepeats(entries)
 end
 
 --- Runs the lookups. dicts: Dictionary objects in display order; words: candidate words.
--- opts: fuzzy, display_word (shown instead of internal keys).
+-- opts: fuzzy, display_word (shown instead of internal keys), tick (called after each
+-- dictionary, e.g. to show KOReader's lookup message once it is due).
 -- Returns results, and a list of { dict, state } for dictionaries that could not answer.
 function Lookup.run(dicts, words, opts)
     opts = opts or {}
     local results, problems = {}, {}
-    for _, d in ipairs(dicts) do
+    for i, d in ipairs(dicts) do
+        if opts.tick and i > 1 then opts.tick() end
         local seen, found = {}, {}
         local failed
         for _, w in ipairs(words) do

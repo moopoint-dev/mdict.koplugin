@@ -45,11 +45,16 @@ end
 
 --- opts: bridge (required), resolve(dict_id, path) -> file path or nil,
 --        logger (optional, with :dbg/:warn), max_slots,
---        schedule(seconds, fn) and unschedule(fn) for background jobs
+--        schedule(seconds, fn) and unschedule(fn) for background jobs,
+--        wake_at() -> clock time or nil, and on_wake(): called once that time has come while
+--        the renderer waits for the WebView outside a background job (to show KOReader's
+--        lookup message while the first result is laid out)
 function WebRenderer.new(opts)
     local self = setmetatable({
         bridge = assert(opts.bridge, "bridge required"),
         resolve = opts.resolve or function() return nil end,
+        wake_at = opts.on_wake and opts.wake_at or nil,
+        on_wake = opts.on_wake,
         logger = opts.logger,
         max_slots = opts.max_slots or WebRenderer.MAX_SLOTS,
         schedule = opts.schedule,
@@ -171,17 +176,33 @@ function WebRenderer:_wait(pred, timeout)
         stored = self:_stored(pred)
         if stored then return result(stored) end
     end
-    return result(self.bridge:session(function()
-        while true do
-            local left = deadline - monotonic()
-            if left <= 0 then return nil, "timeout" end
-            local raw = self.bridge:poll(math.max(1, math.min(100, math.floor(left * 1000))))
-            if raw then
-                local ev, err = offer(raw)
-                if ev or err then return ev, err end
+    while true do
+        local ev, err, wake = self.bridge:session(function()
+            while true do
+                local now = monotonic()
+                local left = deadline - now
+                if left <= 0 then return nil, "timeout" end
+                local wake_at = self.wake_at and self.wake_at()
+                if wake_at and now >= wake_at then return nil, nil, true end
+                local ms = math.min(100, math.floor(left * 1000))
+                if wake_at then ms = math.min(ms, math.floor((wake_at - now) * 1000) + 1) end
+                local raw = self.bridge:poll(math.max(1, ms))
+                if raw then
+                    local e, fatal = offer(raw)
+                    if e or fatal then return e, fatal end
+                end
             end
-        end
-    end))
+        end)
+        if not wake then return result(ev, err) end
+        -- (outside the bridge's session: KOReader's own JNI calls, such as an e-ink refresh,
+        -- attach and detach the thread themselves). Its time does not count either.
+        local t = monotonic()
+        local ok, werr = pcall(self.on_wake)
+        if not ok then self:_log("warn", "on_wake failed:", werr) end
+        deadline = deadline + (monotonic() - t)
+        -- (a hook that keeps saying it is due would spin: it gets one call)
+        if self.wake_at and self.wake_at() and self.wake_at() <= monotonic() then self.wake_at = nil end
+    end
 end
 
 --- Runs fn(job) as a background job, first after `delay` seconds. on_done(job) is called
