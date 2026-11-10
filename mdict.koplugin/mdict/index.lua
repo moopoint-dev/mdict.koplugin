@@ -439,27 +439,52 @@ local FileOrderIndex = {}
 FileOrderIndex.__index = FileOrderIndex
 
 --- Index over a file whose keys are already in normalised order (verified by the caller).
+-- Keys are normalised only when a search looks at them: normalising is several times the
+-- cost of decoding a block, and a search looks at about a dozen keys of the block it reads,
+-- while lookups in dozens of dictionaries read a block or two in each.
 function Index.openFileOrder(reader, spec)
-    local norm = Index.normalizer(spec)
-    local first, last = {}, {}
-    for b = 0, reader.num_key_blocks - 1 do
-        first[b], last[b] = norm(reader.kb_first[b]), norm(reader.kb_last[b])
-    end
-    return setmetatable({ reader = reader, spec = spec, norm = norm, first = first, last = last,
+    return setmetatable({ reader = reader, spec = spec, norm = Index.normalizer(spec), first = {}, last = {},
                           count = reader.num_entries, cache = {}, order = {} }, FileOrderIndex)
 end
 
-function FileOrderIndex:_normKeys(b)
-    local nk = self.cache[b]
-    if nk then return nk end
+-- Normalised first and last keys of key block b.
+function FileOrderIndex:_first(b)
+    local v = self.first[b]
+    if not v then
+        v = self.norm(self.reader.kb_first[b])
+        self.first[b] = v
+    end
+    return v
+end
+
+function FileOrderIndex:_last(b)
+    local v = self.last[b]
+    if not v then
+        v = self.norm(self.reader.kb_last[b])
+        self.last[b] = v
+    end
+    return v
+end
+
+-- Key block b, with its keys normalised as they are asked for (see _key).
+function FileOrderIndex:_block(b)
+    local blk = self.cache[b]
+    if blk then return blk end
     local kb = self.reader:keyBlock(b)
-    nk = {}
-    for i = 0, kb.n - 1 do nk[i] = self.norm(kb.keys[i]) end
-    nk.n, nk.ord0 = kb.n, kb.ord0
-    self.cache[b] = nk
+    blk = { keys = kb.keys, n = kb.n, ord0 = kb.ord0, norm = {} }
+    self.cache[b] = blk
     table.insert(self.order, b)
     if #self.order > 8 then self.cache[table.remove(self.order, 1)] = nil end
-    return nk
+    return blk
+end
+
+function FileOrderIndex:_key(blk, i)
+    local v = blk.norm[i]
+    if not v then
+        v = self.norm(blk.keys[i])
+        blk.norm[i] = v
+    end
+    return v
 end
 
 function FileOrderIndex:_firstBlock(nkey)
@@ -467,7 +492,7 @@ function FileOrderIndex:_firstBlock(nkey)
     local best = hi + 1
     while lo <= hi do
         local mid = rshift(lo + hi, 1)
-        if self.last[mid] >= nkey then
+        if self:_last(mid) >= nkey then
             best = mid
             hi = mid - 1
         else
@@ -481,19 +506,21 @@ function FileOrderIndex:_scan(nkey, match, limit)
     local out = {}
     local nb = self.reader.num_key_blocks
     for b = self:_firstBlock(nkey), nb - 1 do
-        if self.first[b] > nkey and not match(self.first[b]) then break end
-        local nk = self:_normKeys(b)
+        local first = self:_first(b)
+        if first > nkey and not match(first) then break end
+        local blk = self:_block(b)
         -- binary search for the first key >= nkey inside the block
-        local lo, hi = 0, nk.n
+        local lo, hi = 0, blk.n
         while lo < hi do
             local mid = rshift(lo + hi, 1)
-            if nk[mid] < nkey then lo = mid + 1 else hi = mid end
+            if self:_key(blk, mid) < nkey then lo = mid + 1 else hi = mid end
         end
-        for i = lo, nk.n - 1 do
-            if match(nk[i]) then
-                out[#out + 1] = { nk[i], nk.ord0 + i }
+        for i = lo, blk.n - 1 do
+            local k = self:_key(blk, i)
+            if match(k) then
+                out[#out + 1] = { k, blk.ord0 + i }
                 if limit and #out >= limit then return out end
-            elseif nk[i] > nkey then
+            elseif k > nkey then
                 return out
             end
         end
@@ -520,16 +547,21 @@ function FileOrderIndex:close() end
 local MemoryIndex = {}
 MemoryIndex.__index = MemoryIndex
 
---- Hash index held in memory; used for small resource archives and in tests.
+--- Hash index held in memory; used for small files and in tests. Its `inversions` say whether
+-- the file was in normalised order (0: sorted), as Index.verifyOrder would.
 function Index.buildMemory(reader, spec)
     local norm = Index.normalizer(spec)
     local map = {}
+    local prev, inversions = nil, 0
     reader:eachKey(function(key, ord)
         local n = norm(key)
+        if prev and n < prev then inversions = inversions + 1 end
+        prev = n
         local e = map[n]
         if e then e[#e + 1] = ord else map[n] = { ord } end
     end)
-    return setmetatable({ map = map, spec = spec, norm = norm, count = reader.num_entries }, MemoryIndex)
+    return setmetatable({ map = map, spec = spec, norm = norm, count = reader.num_entries,
+                          inversions = inversions }, MemoryIndex)
 end
 
 function MemoryIndex:find(nkey)
