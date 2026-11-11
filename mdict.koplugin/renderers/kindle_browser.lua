@@ -308,6 +308,8 @@ function KB.bridge(opts)
         return nil, err
     end
     bridge.kindle = { cfg = cfg, info = info }
+    -- (e.g. "HeadlessChrome/75.0.3770.143")
+    bridge.browser_major = tonumber(tostring(info.version):match("/(%d+)%."))
     bridge.memoryNote = function() return KB.memoryText(pid) end
     bridge.screenNote = KB.screenLines
     KB.screenLines() -- only what comes from now on

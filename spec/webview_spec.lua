@@ -15,7 +15,8 @@ local function fake_bridge()
         b.calls[#b.calls + 1] = op
         local a = json.decode(args)
         if op == "ping" then
-            push({ ev = "done", slot = slot, id = id, r = { w = 575, h = 550, dpr = 2 } })
+            push({ ev = "done", slot = slot, id = id, r = { w = 575, h = 550, dpr = 2, round = b.round,
+                selectors = b.selectors } })
         elseif op == "setEntry" then
             b.entry_args = args
             push({ ev = "done", slot = slot, id = 999, r = { stale = true } })
@@ -66,6 +67,23 @@ describe("webview renderer", function()
         assert.equal(42, buf[0])
         local _, err = wr:op(slot.id, "nope")
         assert.equal("unknown op", err)
+    end)
+
+    it("knows what an older browser cannot read, from its version or else from the pager", function()
+        local wr = WebRenderer.new({ bridge = { browser_major = 75 } })
+        assert.is_false(wr.has_round)
+        assert.is_false(wr.has_selectors)
+        wr = WebRenderer.new({ bridge = { browser_major = 109 } })
+        assert.is_false(wr.has_round)
+        assert.is_true(wr.has_selectors)
+        local bridge = fake_bridge()
+        bridge.round, bridge.selectors = false, true
+        wr = WebRenderer.new({ bridge = bridge })
+        assert.is_nil(wr.has_round)
+        assert.is_nil(wr.has_selectors)
+        assert(wr:document({ dict_id = "dict1", cache_root = "/cache/dict1", stylesheets = {} }, 1150, 1100))
+        assert.is_false(wr.has_round)
+        assert.is_true(wr.has_selectors)
     end)
 
     it("reuses a loaded document for the same dictionary", function()

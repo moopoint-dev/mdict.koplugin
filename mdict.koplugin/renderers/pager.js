@@ -107,17 +107,448 @@
     return css.replace(/@import\s+(['"])([^'"]*)\1/gi, function (all, q, ref) { return "@import " + q + abs(ref) + q; });
   }
 
-  // Each marked stylesheet, rewritten, in place of its <link> (once per document; started as
-  // the document loads). Resolves when they are all in.
+  // Selectors for WebViews before Chromium 88, which have no :is(), :where() or :not() with a
+  // list or more than one simple selector, and drop every rule whose selector list holds one (or
+  // :has(), from Chromium 105): such selectors are written out as the ones they stand for, and
+  // those that still cannot be read are left out of their lists. As Selectors.flatten in
+  // mdict/selectors.lua, which explains it and rewrites saved copies of stylesheets: keep the two
+  // alike.
+  var HAS_SELECTORS = (function () {
+    try { document.querySelector(":is(a):where(b):not(c, d)"); return true; } catch (e) { return false; }
+  })();
+  var SELECTORS_MAX = 256;
+  var SPACE = " \t\n\f\r";
+
+  function isIdent(c) { return c !== undefined && (/[A-Za-z0-9_-]/.test(c) || c.charCodeAt(0) >= 128); }
+  function asciiLower(s) { return s.replace(/[A-Z]+/g, function (m) { return m.toLowerCase(); }); }
+  function trimSpace(s) { return s.replace(/^[ \t\n\r\f\v]+|[ \t\n\r\f\v]+$/g, ""); }
+
+  // Index of the quote that closes the string starting at i, or -1.
+  function stringEnd(s, i) {
+    var q = s[i];
+    for (var j = i + 1; j < s.length;) {
+      if (s[j] === "\\") j += 2;
+      else if (s[j] === q) return j;
+      else j++;
+    }
+    return -1;
+  }
+
+  // Index of the bracket that closes the one at i ("(" or "["), or -1.
+  function closing(s, i) {
+    var depth = 0;
+    for (var j = i; j < s.length; j++) {
+      var c = s[j];
+      if (c === "\\") {
+        j++;
+      } else if (c === '"' || c === "'") {
+        j = stringEnd(s, j);
+        if (j < 0) return -1;
+      } else if (c === "(" || c === "[") {
+        depth++;
+      } else if (c === ")" || c === "]") {
+        if (--depth === 0) return j;
+      }
+    }
+    return -1;
+  }
+
+  function splitList(s) {
+    var out = [], start = 0, n = s.length;
+    for (var j = 0; j < n; j++) {
+      var c = s[j];
+      if (c === "\\") j++;
+      else if (c === '"' || c === "'") { j = stringEnd(s, j); if (j < 0) j = n - 1; }
+      else if (c === "(" || c === "[") { j = closing(s, j); if (j < 0) j = n - 1; }
+      else if (c === ",") { out.push(trimSpace(s.slice(start, j))); start = j + 1; }
+    }
+    out.push(trimSpace(s.slice(start)));
+    return out;
+  }
+
+  function parseComplex(s) {
+    var nodes = [], start = 0, j = 0, n = s.length;
+    function push(k) {
+      var raw = s.slice(start, j);
+      if (raw === "") return false;
+      nodes.push({ raw: raw, k: k });
+      return true;
+    }
+    while (j < n) {
+      var c = s[j], e;
+      if (c === "\\") {
+        j += 2;
+      } else if (c === '"' || c === "'") {
+        e = stringEnd(s, j);
+        j = (e < 0 ? n - 1 : e) + 1;
+      } else if (c === "(" || c === "[") {
+        e = closing(s, j);
+        if (e < 0) return null;
+        j = e + 1;
+      } else if (SPACE.indexOf(c) >= 0 || c === ">" || c === "+" || c === "~") {
+        var stop = j, k = " ";
+        for (; j < n; j++) {
+          var d = s[j];
+          if (d === ">" || d === "+" || d === "~") {
+            if (k !== " ") return null;
+            k = d;
+          } else if (SPACE.indexOf(d) < 0) {
+            break;
+          }
+        }
+        if (j >= n) {
+          if (k !== " ") return null;
+          j = stop;
+          break; // trailing space
+        }
+        var keep = j;
+        j = stop;
+        if (!push(k)) return null;
+        j = start = keep;
+      } else {
+        j++;
+      }
+    }
+    if (!push(null)) return null;
+    return nodes;
+  }
+
+  function parseCompound(s) {
+    var subs = [], j = 0, n = s.length, typ = null, k, e, stop;
+    function ident(from) {
+      var i = from;
+      while (i < n) {
+        if (s[i] === "\\") i += 2;
+        else if (isIdent(s[i])) i++;
+        else break;
+      }
+      return i;
+    }
+    var b = s[0];
+    if (b === "*" || b === "|" || b === "\\" || isIdent(b) && !/[0-9]/.test(b)) {
+      k = 0;
+      while (k < n) {
+        if (s[k] === "*" || s[k] === "|") k++;
+        else if (s[k] === "\\" || isIdent(s[k])) k = ident(k);
+        else break;
+      }
+      typ = s.slice(0, k);
+      j = k;
+    }
+    while (j < n) {
+      var c = s[j];
+      if (c === "." || c === "#") {
+        stop = ident(j + 1);
+        if (stop === j + 1) return null;
+      } else if (c === "[") {
+        e = closing(s, j);
+        if (e < 0) return null;
+        stop = e + 1;
+      } else if (c === ":") {
+        k = j + 1;
+        if (s[k] === ":") k++;
+        stop = ident(k);
+        if (stop === k) return null;
+        if (s[stop] === "(") {
+          e = closing(s, stop);
+          if (e < 0) return null;
+          stop = e + 1;
+        }
+      } else {
+        return null;
+      }
+      subs.push(s.slice(j, stop));
+      j = stop;
+    }
+    return { type: typ, subs: subs };
+  }
+
+  function renderCompound(c) { return (c.type || "") + c.subs.join("") || "*"; }
+
+  function renderChain(chain) {
+    var out = "";
+    for (var i = 0; i < chain.length; i++) {
+      out += renderCompound(chain[i].c);
+      var k = chain[i].k;
+      if (k && i < chain.length - 1) out += k === " " ? " " : " " + k + " ";
+    }
+    return out;
+  }
+
+  function copyCompound(c) { return { type: c.type, subs: c.subs.slice() }; }
+
+  // One compound for an element that matches both, or null when no element can (two types).
+  function mergeCompounds(a, b) {
+    var ta = a.type, tb = b.type, typ = ta;
+    if (ta && ta !== "*" && tb && tb !== "*") {
+      if (asciiLower(ta) !== asciiLower(tb)) return null;
+    } else if (!ta || ta === "*") {
+      typ = tb || ta;
+    }
+    var c = copyCompound(a);
+    c.type = typ;
+    c.subs = c.subs.concat(b.subs);
+    return c;
+  }
+
+  // Two chains of ancestors for one subject, joined: one before the other, or their last nodes
+  // on one element.
+  function ancestral(k) { return k === " " || k === ">"; }
+
+  // Whether a node with combinator bk to the subject can come right before a node with
+  // combinator ak to it, keeping bk (now to that node) and still standing as bk to the subject.
+  function canPrecede(bk, ak) {
+    if (bk === " ") return true;
+    if (bk === "+") return false;
+    return !ancestral(ak);
+  }
+
+  // The combinator to the subject of one element that two nodes stand for, or null.
+  function bothCombinators(k1, k2) {
+    if (ancestral(k1) !== ancestral(k2)) return null;
+    if (ancestral(k1)) return k1 === ">" || k2 === ">" ? ">" : " ";
+    return k1 === "+" || k2 === "+" ? "+" : "~";
+  }
+
+  // Two chains for the same subject, joined in each order they can take (see join in
+  // mdict/selectors.lua).
+  function joinChains(p, x) {
+    if (!x.length) return [p.slice()];
+    if (!p.length) return [x.slice()];
+    var out = [], pl = p[p.length - 1], xl = x[x.length - 1];
+    function add(chains, node) {
+      for (var i = 0; i < chains.length && out.length <= SELECTORS_MAX; i++) {
+        chains[i].push(node);
+        out.push(chains[i]);
+      }
+    }
+    if (canPrecede(xl.k, pl.k)) add(joinChains(p.slice(0, -1), x), pl);
+    if (canPrecede(pl.k, xl.k)) add(joinChains(p, x.slice(0, -1)), xl);
+    var k = bothCombinators(pl.k, xl.k), m = k && mergeCompounds(pl.c, xl.c);
+    if (m) add(joinChains(p.slice(0, -1), x.slice(0, -1)), { c: m, k: k });
+    return out;
+  }
+
+  function expandCompound(raw) {
+    var parsed = parseCompound(raw);
+    if (!parsed) return null;
+    var alts = [{ chain: [], c: { type: parsed.type, subs: [] } }];
+    for (var i = 0; i < parsed.subs.length; i++) {
+      var sub = parsed.subs[i], m = /^:([A-Za-z0-9-]+)\(/.exec(sub), name = m && asciiLower(m[1]), next;
+      if (name === "is" || name === "where" || name === "matches") {
+        var args = [];
+        splitList(sub.slice(name.length + 2, -1)).forEach(function (item) {
+          // (forgiving: an argument that cannot be written out is left out)
+          var ex = item !== "" && expandComplex(item);
+          if (ex) args = args.concat(ex);
+        });
+        next = [];
+        alts.forEach(function (alt) {
+          args.forEach(function (e) {
+            var merged = mergeCompounds(alt.c, e[e.length - 1].c);
+            if (!merged) return;
+            joinChains(alt.chain, e.slice(0, -1)).forEach(function (chain) {
+              next.push({ chain: chain, c: copyCompound(merged) });
+            });
+          });
+        });
+        alts = next;
+      } else if (name === "not") {
+        // not (A or B) = not A and not B; not (a.b) = not a, or not b
+        var items = splitList(sub.slice(5, -1));
+        for (var t = 0; t < items.length; t++) {
+          var ex = items[t] !== "" && expandComplex(items[t]);
+          if (!ex) return null;
+          for (var u = 0; u < ex.length; u++) {
+            if (ex[u].length > 1) return null; // not with ancestors: no way to write it
+            var c = ex[u][0].c, choices = [];
+            if (c.type && c.type !== "*") choices.push(":not(" + c.type + ")");
+            c.subs.forEach(function (s) { choices.push(":not(" + s + ")"); });
+            next = [];
+            alts.forEach(function (alt) {
+              choices.forEach(function (ch) {
+                var a = { chain: alt.chain, c: copyCompound(alt.c) };
+                a.c.subs.push(ch);
+                next.push(a);
+              });
+            });
+            alts = next; // (none for :not(*): it matches nothing)
+          }
+        }
+      } else {
+        alts.forEach(function (alt) { alt.c.subs.push(sub); });
+      }
+      if (alts.length > SELECTORS_MAX) return null;
+    }
+    return alts;
+  }
+
+  function expandComplex(s) {
+    var nodes = parseComplex(s);
+    if (!nodes) return null;
+    var alts = [[]];
+    for (var i = 0; i < nodes.length; i++) {
+      var ecs = expandCompound(nodes[i].raw), k = nodes[i].k, next = [];
+      if (!ecs) return null;
+      alts.forEach(function (alt) {
+        ecs.forEach(function (e) {
+          joinChains(alt, e.chain).forEach(function (chain) {
+            chain.push({ c: e.c, k: k });
+            next.push(chain);
+          });
+        });
+      });
+      if (next.length > SELECTORS_MAX) return null;
+      alts = next;
+    }
+    return alts;
+  }
+
+  var NEW_SELECTORS = [":is(", ":where(", ":matches(", ":has("];
+
+  function hasNewSelectors(s) {
+    var low = asciiLower(s);
+    for (var f = 0; f < NEW_SELECTORS.length; f++) if (low.indexOf(NEW_SELECTORS[f]) >= 0) return true;
+    // :not() with more than one simple selector
+    for (var from = 0;;) {
+      var i = low.indexOf(":not(", from);
+      if (i < 0) return false;
+      var e = closing(s, i + 4);
+      if (e < 0) return true;
+      var items = splitList(s.slice(i + 5, e));
+      if (items.length !== 1) return true;
+      var c = parseCompound(items[0]);
+      if (!c || c.subs.length + (c.type ? 1 : 0) !== 1) return true;
+      from = e + 1;
+    }
+  }
+
+  function flattenList(prelude) {
+    if (!hasNewSelectors(prelude)) return null;
+    var out = [], changed = false;
+    splitList(prelude).forEach(function (item) {
+      if (!hasNewSelectors(item)) { out.push(item); return; }
+      changed = true;
+      (expandComplex(item) || []).forEach(function (chain) {
+        var s = renderChain(chain);
+        if (!hasNewSelectors(s)) out.push(s);
+      });
+    });
+    if (!changed || !out.length) return null; // (nothing left: the rule stays as it was)
+    return out.join(", ");
+  }
+
+  var GROUP_RULES = { media: 1, supports: 1, document: 1, "-moz-document": 1, layer: 1, container: 1, scope: 1,
+                      "starting-style": 1 };
+
+  // Index of the "{" or ";" that ends the prelude starting at i, or of the "}" that ends the
+  // block, or -1 at the end.
+  function preludeEnd(css, i) {
+    for (var n = css.length; i < n; i++) {
+      var c = css[i], e;
+      if (c === "/" && css[i + 1] === "*") {
+        e = css.indexOf("*/", i + 2);
+        if (e < 0) return -1;
+        i = e + 1;
+      } else if (c === "\\") {
+        i++;
+      } else if (c === '"' || c === "'") {
+        e = stringEnd(css, i);
+        i = e < 0 ? n - 1 : e;
+      } else if (c === "(" || c === "[") {
+        e = closing(css, i);
+        i = e < 0 ? n - 1 : e;
+      } else if (c === "{" || c === ";" || c === "}") {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  // Index of the "}" that closes the block opened at i.
+  function blockEnd(css, i) {
+    var depth = 0, n = css.length;
+    for (; i < n; i++) {
+      var c = css[i], e;
+      if (c === "/" && css[i + 1] === "*") {
+        e = css.indexOf("*/", i + 2);
+        if (e < 0) return n - 1;
+        i = e + 1;
+      } else if (c === "\\") {
+        i++;
+      } else if (c === '"' || c === "'") {
+        e = stringEnd(css, i);
+        i = e < 0 ? n - 1 : e;
+      } else if (c === "{") {
+        depth++;
+      } else if (c === "}") {
+        if (--depth === 0) return i;
+      }
+    }
+    return n - 1;
+  }
+
+  // Rewrites the rules from i to the "}" that closes their block; returns the index after it.
+  function flattenRules(css, i, out) {
+    var n = css.length;
+    while (i < n) {
+      var e = preludeEnd(css, i);
+      if (e < 0) { out.push(css.slice(i)); return n; }
+      var c = css[e];
+      if (c === "}") { out.push(css.slice(i, e + 1)); return e + 1; }
+      var prelude = css.slice(i, e), at = /^[ \t\n\r\f\v]*@([A-Za-z0-9-]+)/.exec(prelude), stop;
+      if (c === ";") {
+        out.push(css.slice(i, e + 1));
+        i = e + 1;
+      } else if (at && GROUP_RULES[asciiLower(at[1])]) {
+        out.push(css.slice(i, e + 1));
+        i = flattenRules(css, e + 1, out);
+      } else if (at) {
+        stop = blockEnd(css, e);
+        out.push(css.slice(i, stop + 1));
+        i = stop + 1;
+      } else {
+        stop = blockEnd(css, e);
+        var lead = /^[ \t\n\r\f\v]*/.exec(prelude)[0], sel = prelude.slice(lead.length);
+        var flat = /[:(]/.test(sel) ? flattenList(sel.replace(/\/\*[\s\S]*?\*\//g, "")) : null;
+        out.push(flat ? lead + flat + " " : prelude);
+        out.push(css.slice(e, stop + 1));
+        i = stop + 1;
+      }
+    }
+    return i;
+  }
+
+  function flattenSelectors(css) {
+    var out = [];
+    flattenRules(css, 0, out);
+    return out.join("");
+  }
+
+  // CSS rewritten for what this WebView lacks.
+  function rewriteCss(css, round, selectors) {
+    if (round && !HAS_ROUND) css = unround(css);
+    if (selectors && !HAS_SELECTORS) css = flattenSelectors(css);
+    return css;
+  }
+
+  // Each marked stylesheet, rewritten, in place of its <link>, and the reader's override CSS
+  // (once per document; started as the document loads). Resolves when they are all in.
   var unroundedSheets = null;
   function unroundSheets() {
     if (unroundedSheets) return unroundedSheets;
-    var links = HAS_ROUND ? [] : Array.prototype.slice.call(document.querySelectorAll("link[data-mdict-round]"));
+    var marks = [];
+    if (!HAS_ROUND) marks.push("link[data-mdict-round]");
+    if (!HAS_SELECTORS) marks.push("link[data-mdict-flat]");
+    var links = marks.length ? Array.prototype.slice.call(document.querySelectorAll(marks.join(","))) : [];
+    var own = el("mdict-user-css");
+    if (own && !(HAS_ROUND && HAS_SELECTORS)) own.textContent = rewriteCss(own.textContent, true, true);
     unroundedSheets = Promise.all(links.map(function (link) {
       return fetch(link.href).then(function (r) { return r.ok ? r.text() : null; }).then(function (text) {
         if (text === null || !link.parentNode) return;
         var style = document.createElement("style");
-        style.textContent = absoluteRefs(unround(text), link.href);
+        style.textContent = absoluteRefs(rewriteCss(text, link.hasAttribute("data-mdict-round"),
+          link.hasAttribute("data-mdict-flat")), link.href);
         link.parentNode.replaceChild(style, link);
       }).catch(function () { /* the sheet stays as it was */ });
     }));
@@ -128,8 +559,11 @@
   function unroundStyles(root) {
     var styles = root.getElementsByTagName("style");
     for (var i = 0; i < styles.length; i++) {
-      if (/round\(/i.test(styles[i].textContent)) styles[i].textContent = unround(styles[i].textContent);
+      var css = styles[i].textContent;
+      var round = !HAS_ROUND && /round\(/i.test(css), selectors = !HAS_SELECTORS && /:(is|where|matches|has|not)\(/i.test(css);
+      if (round || selectors) styles[i].textContent = rewriteCss(css, round, selectors);
     }
+    if (HAS_ROUND) return;
     var styled = root.querySelectorAll('[style*="round(" i]');
     for (var j = 0; j < styled.length; j++) styled[j].setAttribute("style", unround(styled[j].getAttribute("style")));
   }
@@ -1214,9 +1648,9 @@
     try { opts = arg(opId); } catch (e) { return fail(opId, e); }
     (async function () {
       var t = timer();
-      if (!HAS_ROUND) {
+      if (!HAS_ROUND || !HAS_SELECTORS) {
         await withTimeout(unroundSheets(), 3000);
-        t.mark("unround");
+        t.mark("rewrite");
       }
       measureViewport();
       var body = document.body;
@@ -1231,7 +1665,7 @@
       state.rectScale = boxesZoomed() ? (opts.zoom || 1) : 1;
       document.documentElement.style.setProperty("--mdict-gutter", GUTTER * (opts.zoom || 1) + "px");
       zoom.innerHTML = opts.html || "";
-      if (!HAS_ROUND) unroundStyles(zoom);
+      if (!HAS_ROUND || !HAS_SELECTORS) unroundStyles(zoom);
       state.overlays = [];
       playing = null;
       drawPlayer();
@@ -1646,7 +2080,7 @@
 
   MDict.ping = function (opId) {
     measureViewport();
-    done(opId, { ok: true, w: state.W, h: state.H, dpr: state.dpr, round: HAS_ROUND });
+    done(opId, { ok: true, w: state.W, h: state.H, dpr: state.dpr, round: HAS_ROUND, selectors: HAS_SELECTORS });
   };
 
   window.MDict = MDict;

@@ -361,61 +361,82 @@ function Manager.cssFamilies(d, stylesheets)
     return families or nil
 end
 
---- Those of a dictionary's stylesheets that use CSS round() (see Document.usesRound), as
--- { [path] = true }. Each is read once per dictionary.
-function Manager.roundSheets(d, stylesheets)
-    local Document = require("renderers/document")
-    local fs = require("mdict/fs")
-    d._round_sheets = d._round_sheets or {}
-    local out = {}
-    for _, p in ipairs(stylesheets) do
-        local uses = d._round_sheets[p]
-        if uses == nil then
-            local file = d:resource(p)
-            local css = file and fs.readAll(file)
-            uses = css and Document.usesRound(css) or false
-            d._round_sheets[p] = uses
-        end
-        if uses then out[p] = true end
+-- What a stylesheet needs rewritten for older WebViews: { round = bool, selectors = bool }
+-- (see Document.usesRound and Selectors.uses). Each is read once per dictionary.
+local function sheet_needs(d, p)
+    d._sheet_needs = d._sheet_needs or {}
+    local needs = d._sheet_needs[p]
+    if needs == nil then
+        local file = d:resource(p)
+        local css = file and require("mdict/fs").readAll(file)
+        needs = {
+            round = css and require("renderers/document").usesRound(css) or false,
+            selectors = css and require("mdict/selectors").uses(css) or false,
+        }
+        d._sheet_needs[p] = needs
     end
-    return out
+    return needs
 end
 
 Manager.UNROUND_SUFFIX = ".mdict-unround.css"
+Manager.FLAT_SUFFIX = ".mdict-flat.css"
+Manager.UNROUND_FLAT_SUFFIX = ".mdict-unround-flat.css"
+-- Ends each rewritten copy. Bump it when Html.unround or Selectors.flatten change what they
+-- write, so that copies an older version made are made again. (At the end: a comment before an
+-- @charset rule would void it.)
+Manager.REWRITE_MARK = "\n/* mdict rewrite 2 */\n"
 
---- Path of a copy of stylesheet p with round() rewritten (Html.unround), saved next to the
--- extracted sheet so that its relative url()s and @imports still resolve; nil if it cannot be
--- made. Made again when the extracted sheet is newer.
-function Manager.unroundedSheet(d, p)
+local function ends_with(path, s)
+    local f = io.open(path, "rb")
+    if not f then return false end
+    local same = f:seek("end", -#s) ~= nil and f:read(#s) == s
+    f:close()
+    return same
+end
+
+--- Path of a copy of stylesheet p with round() rewritten (Html.unround) and/or its selectors
+-- written out (Selectors.flatten), saved next to the extracted sheet so that its relative url()s
+-- and @imports still resolve; nil if it cannot be made. Made again when the extracted sheet is
+-- newer, or the copy was made by another version of the rewrite (see REWRITE_MARK).
+function Manager.rewrittenSheet(d, p, round, selectors)
     local fs = require("mdict/fs")
     local src = d:resource(p)
     if not src then return nil end
-    local rel = p:gsub("%.[Cc][Ss][Ss]$", "") .. Manager.UNROUND_SUFFIX
+    local suffix = round and (selectors and Manager.UNROUND_FLAT_SUFFIX or Manager.UNROUND_SUFFIX)
+        or Manager.FLAT_SUFFIX
+    local rel = p:gsub("%.[Cc][Ss][Ss]$", "") .. suffix
     local target = d.res_dir .. "/" .. rel
     local _, src_mtime = fs.stat(src)
     local _, mtime = fs.stat(target)
-    if not (mtime and src_mtime and mtime >= src_mtime) then
+    if not (mtime and src_mtime and mtime >= src_mtime and ends_with(target, Manager.REWRITE_MARK)) then
         local css = fs.readAll(src)
-        if not (css and fs.writeAtomic(target, require("mdict/html").unround(css))) then return nil end
+        if not css then return nil end
+        if round then css = require("mdict/html").unround(css) end
+        if selectors then css = require("mdict/selectors").flatten(css) end
+        if not fs.writeAtomic(target, css .. Manager.REWRITE_MARK) then return nil end
     end
     return rel
 end
 
---- The stylesheets a document links, and those the pager still has to rewrite round() in.
--- A WebView without round() (before Chromium 125) gets saved, rewritten copies: rewriting a
+--- The stylesheets a document links, and those the pager still has to rewrite: round() in
+-- ({ [href] = true }), and selectors in. A WebView without round() (before Chromium 125) or
+-- without :is() and :where() (before Chromium 88) gets saved, rewritten copies: rewriting a
 -- 1.6 MB stylesheet in the page, and parsing it a second time there, took 0.9 s each time a
 -- document was loaded on a Clear7 (WebView 109). Until the renderer knows (its first document),
 -- the pager rewrites them as before.
 function Manager.documentSheets(renderer, d, stylesheets)
-    local round_sheets = Manager.roundSheets(d, stylesheets)
-    if renderer.has_round ~= false or next(round_sheets) == nil then return stylesheets, round_sheets end
-    local linked, left = {}, {}
+    local linked, round_left, flat_left = {}, {}, {}
     for i, p in ipairs(stylesheets) do
-        local copy = round_sheets[p] and Manager.unroundedSheet(d, p)
-        linked[i] = copy or p
-        if round_sheets[p] and not copy then left[p] = true end
+        local needs = sheet_needs(d, p)
+        local round = needs.round and renderer.has_round == false
+        local selectors = needs.selectors and renderer.has_selectors == false
+        local copy = (round or selectors) and Manager.rewrittenSheet(d, p, round, selectors)
+        local href = copy or p
+        linked[i] = href
+        if needs.round and not (copy and round) then round_left[href] = true end
+        if needs.selectors and not (copy and selectors) then flat_left[href] = true end
     end
-    return linked, left
+    return linked, round_left, flat_left
 end
 
 --- A dictionary's own setting, else the global one, else the default.
@@ -475,7 +496,7 @@ function Manager.widget(state, dql, r, opts)
     local eink = settings.eink
     if eink == nil then eink = Device:hasEinkScreen() end
     local WebScrollWidget = require("widgets/webscrollwidget")
-    local linked, round_sheets = Manager.documentSheets(renderer, d, stylesheets)
+    local linked, round_sheets, flat_sheets = Manager.documentSheets(renderer, d, stylesheets)
     local t0 = clock()
     t_html = t0 - t_html
     local widget, err = WebScrollWidget.create{
@@ -485,6 +506,7 @@ function Manager.widget(state, dql, r, opts)
             cache_root = d.res_dir,
             stylesheets = linked,
             round_sheets = round_sheets,
+            flat_sheets = flat_sheets,
             fonts = settings.fonts,
             user_font = user_font,
             css_families = user_font and Manager.cssFamilies(d, stylesheets) or nil,

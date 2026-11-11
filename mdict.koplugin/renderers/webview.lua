@@ -73,6 +73,11 @@ function WebRenderer.new(opts)
         op_timeout = opts.bridge.op_timeout or WebRenderer.OP_TIMEOUT,
         capture_timeout = opts.bridge.capture_timeout or WebRenderer.CAPTURE_TIMEOUT,
     }, WebRenderer)
+    -- What the browser can read (see Manager.documentSheets): from its version when the bridge
+    -- knows it (the Kindle's), so that even the first document gets saved, rewritten stylesheets;
+    -- else from the pager, once a document is loaded.
+    local major = opts.bridge.browser_major
+    if major then self.has_round, self.has_selectors = major >= 125, major >= 88 end
     return self
 end
 
@@ -370,8 +375,9 @@ function WebRenderer:document(doc, w, h, avoid)
     local t = monotonic()
     for _ = 1, 20 do
         local r = self:op(slot.id, "ping", {}, 2)
-        -- whether the WebView has CSS round() (see Manager.documentSheets)
+        -- whether the WebView has CSS round(), and :is() and :where() (see Manager.documentSheets)
         if r and type(r.round) == "boolean" then self.has_round = r.round end
+        if r and type(r.selectors) == "boolean" then self.has_selectors = r.selectors end
         if r and math.abs(r.w * r.dpr - w) <= 2 and math.abs(r.h * r.dpr - h) <= 2 then
             slot.dpr = r.dpr
             slot.trace.ping = ms(t)

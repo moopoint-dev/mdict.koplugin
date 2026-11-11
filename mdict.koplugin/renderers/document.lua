@@ -306,6 +306,8 @@ end
 -- opts:
 --   stylesheets: resource paths of the dictionary's stylesheets, relative to the dictionary root
 --   round_sheets: { [path] = true } for those of them that use round() (see usesRound)
+--   flat_sheets: { [path] = true } for those whose selectors the pager is to write out for
+--     WebViews before Chromium 88 (see mdict/selectors.lua)
 --   fonts: per-kind font settings (see fontAliasCss)
 --   font_aliases: replaces Document.FONT_ALIASES (false disables aliasing)
 --   user_css: extra CSS applied after the dictionary's own (e.g. <name>.koreader.css)
@@ -350,10 +352,11 @@ function Document.build(opts)
         '<meta name="color-scheme" content="light only">',
         "<style id=\"mdict-fonts\">\n", alias_css, "\n</style>",
     }
-    local round_sheets = opts.round_sheets or {}
+    local round_sheets, flat_sheets = opts.round_sheets or {}, opts.flat_sheets or {}
     for _, href in ipairs(opts.stylesheets or {}) do
         parts[#parts + 1] = '<link rel="stylesheet" href="' .. html_attr(href) .. '"'
-            .. (round_sheets[href] and " data-mdict-round" or "") .. ">"
+            .. (round_sheets[href] and " data-mdict-round" or "")
+            .. (flat_sheets[href] and " data-mdict-flat" or "") .. ">"
     end
     if user_font_css ~= "" then
         parts[#parts + 1] = "<style id=\"mdict-user-font\">\n" .. user_font_css .. "\n</style>"
@@ -372,6 +375,7 @@ function Document.build(opts)
     local key_parts = { tostring(#html), opts.lang or "" }
     for _, href in ipairs(opts.stylesheets or {}) do
         key_parts[#key_parts + 1] = href .. (round_sheets[href] and "\0round" or "")
+            .. (flat_sheets[href] and "\0flat" or "")
     end
     key_parts[#key_parts + 1] = alias_css
     key_parts[#key_parts + 1] = user_font_css

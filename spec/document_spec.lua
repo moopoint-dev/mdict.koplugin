@@ -36,34 +36,62 @@ describe("document", function()
         assert.truthy(a:find('<link rel="stylesheet" href="a.css">', 1, true))
         assert.truthy(a:find('<link rel="stylesheet" href="b.css" data-mdict-round>', 1, true))
         assert.are_not.equal(ka, kb)
+        -- and those whose selectors it is to write out (see mdict/selectors.lua)
+        local c, kc = Document.build({ stylesheets = { "a.css", "b.css" }, round_sheets = { ["b.css"] = true },
+            flat_sheets = { ["a.css"] = true, ["b.css"] = true } })
+        assert.truthy(c:find('<link rel="stylesheet" href="a.css" data-mdict-flat>', 1, true))
+        assert.truthy(c:find('<link rel="stylesheet" href="b.css" data-mdict-round data-mdict-flat>', 1, true))
+        assert.are_not.equal(ka, kc)
     end)
 
-    it("links saved copies of round() stylesheets for a WebView without round()", function()
+    it("links saved, rewritten copies of stylesheets for a WebView that needs them", function()
         local helper = require("spec.helper")
         local fs = require("mdict/fs")
         local Manager = require("renderers/manager")
+        local MARK = Manager.REWRITE_MARK
         local res = helper.tmpdir("unround")
         fs.writeAtomic(res .. "/css/a.css", ".a{line-height:round(nearest, 1.5em, 1px);background:url(../img/x.png)}")
         fs.writeAtomic(res .. "/b.css", ".b{color:red}")
+        fs.writeAtomic(res .. "/c.css", ".c :is(p, li){color:red} .d{line-height:round(2em, 1px)}")
         local d = { res_dir = res, resource = function(_, p) return fs.isFile(res .. "/" .. p) and res .. "/" .. p or nil end }
-        local sheets = { "css/a.css", "b.css" }
-        -- not known yet (the renderer's first document), or the WebView has round(): the pager rewrites
-        local linked, marked = Manager.documentSheets({}, d, sheets)
-        assert.same(sheets, linked)
-        assert.same({ ["css/a.css"] = true }, marked)
-        linked, marked = Manager.documentSheets({ has_round = true }, d, sheets)
-        assert.same(sheets, linked)
-        -- without round(): a rewritten copy next to the sheet, so its url()s resolve the same
-        linked, marked = Manager.documentSheets({ has_round = false }, d, sheets)
-        assert.same({ "css/a.mdict-unround.css", "b.css" }, linked)
-        assert.same({}, marked)
-        assert.equal(".a{line-height:calc( 1.5em);background:url(../img/x.png)}",
+        local sheets = { "css/a.css", "b.css", "c.css" }
+        -- not known yet (the renderer's first document), or the WebView has it all: the pager rewrites
+        -- what it lacks
+        for _, renderer in ipairs({ {}, { has_round = true, has_selectors = true } }) do
+            local linked, round, flat = Manager.documentSheets(renderer, d, sheets)
+            assert.same(sheets, linked)
+            assert.same({ ["css/a.css"] = true, ["c.css"] = true }, round)
+            assert.same({ ["c.css"] = true }, flat)
+        end
+        -- without round() (Chromium 109): a copy without it next to the sheet, so its url()s
+        -- resolve the same
+        local linked, round, flat = Manager.documentSheets({ has_round = false, has_selectors = true }, d, sheets)
+        assert.same({ "css/a.mdict-unround.css", "b.css", "c.mdict-unround.css" }, linked)
+        assert.same({}, round)
+        assert.same({ ["c.mdict-unround.css"] = true }, flat)
+        assert.equal(".a{line-height:calc( 1.5em);background:url(../img/x.png)}" .. MARK,
             fs.readAll(res .. "/css/a.mdict-unround.css"))
+        -- nor :is() (Chromium 75): both rewritten
+        linked, round, flat = Manager.documentSheets({ has_round = false, has_selectors = false }, d, sheets)
+        assert.same({ "css/a.mdict-unround.css", "b.css", "c.mdict-unround-flat.css" }, linked)
+        assert.same({}, round)
+        assert.same({}, flat)
+        assert.equal(".c p, .c li {color:red} .d{line-height:calc(2em)}" .. MARK,
+            fs.readAll(res .. "/c.mdict-unround-flat.css"))
+        linked = Manager.documentSheets({ has_round = true, has_selectors = false }, d, sheets)
+        assert.same({ "css/a.css", "b.css", "c.mdict-flat.css" }, linked)
+        assert.equal(".c p, .c li {color:red} .d{line-height:round(2em, 1px)}" .. MARK,
+            fs.readAll(res .. "/c.mdict-flat.css"))
         -- made again when the sheet changes
         fs.writeAtomic(res .. "/css/a.css", ".a{line-height:round(2em, 1px)}")
         os.execute("touch -d '+1 minute' '" .. res .. "/css/a.css'")
         Manager.documentSheets({ has_round = false }, d, sheets)
-        assert.equal(".a{line-height:calc(2em)}", fs.readAll(res .. "/css/a.mdict-unround.css"))
+        assert.equal(".a{line-height:calc(2em)}" .. MARK, fs.readAll(res .. "/css/a.mdict-unround.css"))
+        -- or when another version of the plugin made the copy
+        fs.writeAtomic(res .. "/css/a.mdict-unround.css", ".a{}")
+        os.execute("touch -d '+2 minute' '" .. res .. "/css/a.mdict-unround.css'")
+        Manager.documentSheets({ has_round = false }, d, sheets)
+        assert.equal(".a{line-height:calc(2em)}" .. MARK, fs.readAll(res .. "/css/a.mdict-unround.css"))
     end)
 
     it("finds the font families a stylesheet uses", function()

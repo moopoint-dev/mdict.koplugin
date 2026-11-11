@@ -133,7 +133,10 @@ keep that file next to the `.mdx`.
 - **Render entries with the Kindle's browser** (Kindles only, on by default, in
   *Display*): lays entries out with the web browser of the Kindle's
   firmware (5.16 to 5.18, Chromium 75 in Amazon's `/chroot`), as the WebView does on
-  Android: the dictionary's CSS, vertical text and the entry's scripts. Kindles that
+  Android: the dictionary's CSS, vertical text and the entry's scripts. CSS made for
+  newer browsers is adapted to it (as for Android WebViews before Chromium 88):
+  `:is()`, `:where()` and `:not()` with a list are written out as the plain
+  selectors they stand for, and `round()` as `calc()`. Kindles that
   cannot run it (other firmware, Amazon's software stopped, too little free memory)
   use KOReader's renderer without a word; the *Kindle browser check* says why. The first
   lookup starts the browser, which takes about 20 seconds on a Paperwhite 4; it then
@@ -206,6 +209,8 @@ a tag or version that differs. A release needs an asset named
   text, scripts (such as buttons that open or close a section) and audio do not work.
 - Some dictionaries' CSS is made for color phone screens; override files (above)
   can adapt it for e-ink.
+- On browsers before Chromium 105 (the Kindle's), CSS rules that need `:has()` do
+  not apply, and a rule with `:where()` can win where it would not in a newer browser.
 
 ## Dictionary exporters
 

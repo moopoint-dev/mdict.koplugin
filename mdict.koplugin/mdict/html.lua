@@ -242,7 +242,7 @@ local ROUND_STRATEGIES = { nearest = true, up = true, down = true, ["to-zero"] =
 --- CSS with each round(<strategy>?, A, <step>?) written as calc(A), for WebViews before
 -- Chromium 125 (no round(): a declaration using it is dropped). As the pager's unround(),
 -- which does it in the page; a stylesheet is rewritten here once, and saved (see
--- Manager.unroundedSheet), instead of in every page that loads it.
+-- Manager.rewrittenSheet), instead of in every page that loads it.
 function Html.unround(css)
     local out, from, pos, n = {}, 1, 1, #css
     while true do
