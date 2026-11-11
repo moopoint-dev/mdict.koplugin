@@ -2,9 +2,10 @@
 
 MDict (.mdx/.mdd) dictionaries for KOReader, shown in KOReader's own
 dictionary popup next to its StarDict dictionaries. On Android, entries are
-laid out by the system WebView (Chromium) and shown a page at a time, so
-complex dictionary layouts keep their original look, including vertical
-Japanese, and their scripts and audio work. Elsewhere, entries fall back to
+laid out by the system WebView (Chromium); on Kindles with firmware 5.16 to
+5.18, by the Kindle's own browser. They are shown a page at a time, so complex
+dictionary layouts keep their original look, including vertical Japanese, and
+their scripts work (audio too, on Android). Elsewhere, entries fall back to
 KOReader's built-in HTML renderer.
 
 ## Why
@@ -33,7 +34,8 @@ This plugin keeps lookups in KOReader's popup, with no conversion step:
   key index), and lists them with the StarDict dictionaries in *Manage dictionaries*.
 - On Android it lays entries out with the system WebView: full CSS, web fonts and
   the fonts in the `.mdd`, vertical text, ruby, tate-chu-yoko, SVG, and the
-  dictionary's own scripts.
+  dictionary's own scripts. On Kindles it does the same with the Kindle's own
+  browser (see *Settings*).
 - It plays pronunciations and example recordings from the `.mdd`.
 - It shows each entry a page at a time, sized to the popup, for e-ink. It works with
   KOReader's large window and with nested lookups, lookup history and the
