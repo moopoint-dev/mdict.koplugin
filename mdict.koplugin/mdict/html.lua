@@ -166,16 +166,15 @@ end
 --- Rewrites MDict link schemes for KOReader:
 --   entry://word#anchor -> bword://word#anchor (native nested lookup)
 --   entry://#anchor     -> #anchor             (a place in the same entry)
---   sound://path        -> mdict-sound://path   (handled by the plugin)
 --   file://path         -> path                 (relative resource)
+-- sound://path stays: dictionaries style their sound links by it (a[href^="sound://"]), and
+-- the plugin plays it (see Html.soundPath).
 function Html.rewriteLinks(html)
     local link = "(%s[Hh][Rr][Ee][Ff]%s*=%s*)([\"'])([%a][%w+.-]*):(/?/?)(#?)"
     html = gsub_at(html, "href", 1, link, function(pre, q, scheme, _, hash)
         local s = scheme:lower()
         if s == "entry" then
             return pre .. q .. (hash == "#" and "#" or "bword://")
-        elseif s == "sound" then
-            return pre .. q .. "mdict-sound://" .. hash
         elseif s == "file" then
             return pre .. q .. hash
         end
@@ -184,6 +183,12 @@ function Html.rewriteLinks(html)
         return pre .. q
     end)
     return html
+end
+
+--- The sound a link plays: the path after sound:// (or mdict-sound://, how the plugin hands
+-- over the sounds of audio players), else nil.
+function Html.soundPath(uri)
+    return uri and (uri:match("^[Ss][Oo][Uu][Nn][Dd]://(.*)$") or uri:match("^mdict%-sound://(.*)$"))
 end
 
 local function nothing() return "" end

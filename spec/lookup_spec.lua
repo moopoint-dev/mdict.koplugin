@@ -76,7 +76,7 @@ describe("lookup", function()
         local stripped, hrefs = Html.extractStylesheets(html)
         assert.same({ "a.css" }, hrefs)
         assert.is_nil(stripped:find("a.css", 1, true))
-        assert.equal('<a href="bword://run#s1">run</a> <a HREF=\'mdict-sound://r.mp3\'>&#x1f50a;</a><img src="p.png">',
+        assert.equal('<a href="bword://run#s1">run</a> <a HREF=\'sound://r.mp3\'>&#x1f50a;</a><img src="p.png">',
             Html.rewriteLinks(html):match("(<a .-<img[^>]*>)"))
         assert.equal('<link rel="stylesheet" href="a.css"><LINK REL="icon" HREF="i.ico"><p class="x">'
             .. '<a href="entry://run#s1">run</a> <a HREF=\'sound://r.mp3\'>&#x1f50a;</a><img src="file://p.png"></p>',

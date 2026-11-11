@@ -362,7 +362,7 @@ function WebHtmlBoxWidget:onTapText(arg, ges)
         log(string.format("MDict: tap at %d,%d on page %d: %s", math.floor(pos.x), math.floor(pos.y), self.page_number,
             link and ("link " .. tostring(link.uri) .. (away and away > 0 and string.format(" (%d px away)", math.floor(away + 0.5)) or ""))
             or ("no link (" .. #(self.links_cache[self.page_number] or {}) .. " on the page)")))
-        if link and link.uri and link.uri:find("^mdict%-sound://") and self.html_link_tapped_callback then
+        if link and require("mdict/html").soundPath(link.uri) and self.html_link_tapped_callback then
             -- A sound link is KOReader's to play, as in MDict apps: not first offered to the entry's
             -- scripts, which waits for the WebView, and it may be laying out the next result
             -- (seconds on a Clear7 before the sound played).

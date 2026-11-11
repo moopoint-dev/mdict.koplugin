@@ -249,7 +249,7 @@ local function download(url, path)
     return nil, type(code) == "number" and ("HTTP " .. code) or tostring(code or "network error")
 end
 
---- Plays a sound from a dictionary: path is the part after mdict-sound://, as in the entry;
+--- Plays a sound from a dictionary: path is the part after sound://, as in the entry;
 -- sources, when given, are all the sources the entry gives the sound, in order (paths in the
 -- dictionary, http(s) URLs). The first one in the dictionary plays; else the first on the web,
 -- downloaded when KOReader is online. Returns true, or nil and a message.

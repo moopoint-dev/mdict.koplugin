@@ -9,7 +9,7 @@ Hooks into KOReader's dictionary lookup.
   only run when StarDict dictionaries are requested.
 - ReaderDictionary:showDict restores the fields tidyMarkup may change and,
   when MuPDF renders, extracts the resources it needs first.
-- Link taps: "#anchor" links stay in the entry, mdict-sound:// plays audio.
+- Link taps: "#anchor" links stay in the entry, sound:// plays audio.
 - DictQuickLookup shows MDict results with the plugin's renderer when one is
   available (see Integration.widget).
 ]]
@@ -329,7 +329,7 @@ function Integration.install(state)
         if uri and Integration.state.library:byTitle(dictionary) then
             -- handled inside the entry (bword://#x: a place in the same entry, nothing to look up)
             if uri:sub(1, 1) == "#" or uri:find("^bword://#") then return end
-            local sound = uri:match("^mdict%-sound://(.*)$")
+            local sound = Html.soundPath(uri)
             if sound then
                 if Integration.state.playSound then Integration.state.playSound(dictionary, sound, link.sources) end
                 return
