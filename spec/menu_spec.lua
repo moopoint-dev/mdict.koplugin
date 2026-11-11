@@ -75,6 +75,22 @@ describe("menus", function()
         assert.equal("mupdf", store.mdict.renderer)
         find(items, "Render entries").callback()
         assert.is_nil(store.mdict.renderer)
+        -- on Kindles, the Kindle's browser: on by default
+        local Device = require("device")
+        Device.isKindle = function() return true end
+        local kindle = find(plugin:displayItems(), "Render entries with the Kindle's browser")
+        Device.isKindle = function() return false end
+        assert.is_true(kindle.checked_func())
+        kindle.callback()
+        assert.is_false(store.mdict.kindle_browser)
+        assert.is_false(kindle.checked_func())
+        kindle.callback()
+        assert.is_nil(store.mdict.kindle_browser)
+        store.mdict.kindle_browser = true -- turned on when it was off by default
+        assert.is_true(kindle.checked_func())
+        kindle.callback()
+        assert.is_false(store.mdict.kindle_browser)
+        store.mdict.kindle_browser = nil
         find(find(items, "E-ink").sub_item_table, "Off").callback()
         assert.is_false(store.mdict.eink)
 

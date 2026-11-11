@@ -165,10 +165,28 @@ describe("Kindle browser in the manager", function()
         package.loaded["renderers/manager"] = nil
     end)
 
-    it("is off unless the reader turns it on", function()
-        assert.is_nil(Manager.get({ settings = {} }))
+    it("is on unless the reader turns it off", function()
+        assert.is_nil(Manager.get({ settings = { kindle_browser = false } }))
         assert.equal(0, #kb_calls)
         assert.equal(0, #shown) -- nothing to tell
+        Manager.failed = nil -- (as turning it on in the menu does)
+        assert(Manager.get({ settings = {} }))
+        assert.equal("killOrphans", kb_calls[1])
+        Manager.shutdown()
+    end)
+
+    it("leaves Kindles that cannot run it to the built-in renderer without a word, unless turned on", function()
+        package.loaded["mdict/kindletest"].problems = function()
+            return { "This Kindle's browser is not supported by the test yet." }
+        end
+        assert.is_nil(Manager.get({ settings = {} }))
+        assert.truthy(Manager.failed:find("not supported", 1, true))
+        assert.equal(0, #shown)
+        -- turned on in the menu (when it was off by default): the reader is told
+        Manager.failed = nil
+        assert.is_nil(Manager.get({ settings = { kindle_browser = true } }))
+        assert.equal(1, #shown)
+        assert.truthy(shown[1].text:find("not supported", 1, true))
     end)
 
     it("starts the browser with one page, the screen's pixel ratio and the shim", function()

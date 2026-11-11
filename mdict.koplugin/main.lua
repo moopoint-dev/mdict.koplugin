@@ -396,20 +396,21 @@ function MDict:displayItems()
         end,
     }
     if require("device"):isKindle() then
-        -- off by default: it starts Amazon's browser in the background (renderers/kindle_browser.lua)
+        -- on by default (nil): it starts Amazon's browser in the background (renderers/kindle_browser.lua)
         render_item = {
-            text = _("Render entries with the Kindle's browser (experimental)"),
+            text = _("Render entries with the Kindle's browser"),
             help_text = _("Lays entries out with the web browser of the Kindle's firmware (5.16 to 5.18), so they "
                 .. "look as their dictionary intends, with vertical text and the dictionary's scripts. The first "
                 .. "lookup starts the browser, which takes about 20 seconds on a Paperwhite; it then stays open, "
                 .. "also while the Kindle sleeps, and closes after twenty minutes without a lookup. It uses about "
                 .. "70 MB of memory, starts only when 80 MB are free, and is closed if memory runs low later. "
-                .. "When off, or once the browser has failed, KOReader's built-in HTML renderer is used (until "
-                .. "KOReader restarts, or this is turned off and on). If the Kindle behaves oddly, turn this off "
-                .. "and restart the Kindle."),
-            checked_func = function() return s.kindle_browser == true end,
+                .. "When off, on Kindles that cannot run it, or once the browser has failed, KOReader's built-in "
+                .. "HTML renderer is used (until KOReader restarts, or this is turned off and on). If the Kindle "
+                .. "behaves oddly, turn this off and restart the Kindle."),
+            checked_func = function() return s.kindle_browser ~= false end,
             callback = function()
-                s.kindle_browser = not s.kindle_browser or nil
+                -- (a true kept from when it was off by default counts as on)
+                if s.kindle_browser == false then s.kindle_browser = nil else s.kindle_browser = false end
                 save_settings()
                 Manager.shutdown()
                 Manager.failed, Manager.notified = nil, false

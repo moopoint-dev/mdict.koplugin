@@ -130,10 +130,12 @@ keep that file next to the `.mdx`.
 - **Rebuild indexes**, **Clear extracted resources**, **Rescan**.
 - **Updates**: the installed version, *Check for updates*, and *Check for updates
   automatically* (on by default).
-- **Render entries with the Kindle's browser (experimental)** (Kindles only, off by
-  default, in *Display*): lays entries out with the web browser of the Kindle's
+- **Render entries with the Kindle's browser** (Kindles only, on by default, in
+  *Display*): lays entries out with the web browser of the Kindle's
   firmware (5.16 to 5.18, Chromium 75 in Amazon's `/chroot`), as the WebView does on
-  Android: the dictionary's CSS, vertical text and the entry's scripts. The first
+  Android: the dictionary's CSS, vertical text and the entry's scripts. Kindles that
+  cannot run it (other firmware, Amazon's software stopped, too little free memory)
+  use KOReader's renderer without a word; the *Kindle browser check* says why. The first
   lookup starts the browser, which takes about 20 seconds on a Paperwhite 4; it then
   stays open, also while the Kindle sleeps, and is closed after twenty minutes without
   a lookup. Pages come from the browser's screencast (under a second each on the
@@ -197,8 +199,8 @@ a tag or version that differs. A release needs an asset named
 - MDict 3.0 files, and registered files whose records are encrypted, are not
   supported yet.
 - Speex audio does not play.
-- The WebView renderer is Android only, with an experimental one on Kindles with firmware
-  5.16 to 5.18 (see *Settings*). On other Kindles, Kobo, PocketBook and other
+- The WebView renderer works on Android, and on Kindles with firmware 5.16 to 5.18
+  through the Kindle's own browser (see *Settings*). On other Kindles, Kobo, PocketBook and other
   devices, entries are laid out by KOReader's renderer (MuPDF) with the
   dictionary's CSS, as far as MuPDF supports it (no flexbox or grid). Vertical
   text, scripts (such as buttons that open or close a section) and audio do not work.

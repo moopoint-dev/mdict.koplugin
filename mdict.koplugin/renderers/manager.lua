@@ -28,9 +28,12 @@ Manager.plugin_dir = plugin_dir
 
 local function info_log(...) logger.info("MDict:", ...) end
 
--- The Kindle's browser as a bridge, when the reader turned it on and nothing stands in the way.
+-- The Kindle's browser as a bridge, unless the reader turned it off or something stands in the way.
+-- Returns the bridge, or nil, why, and whether to say nothing: on by default, it quietly leaves
+-- Kindles that cannot run it (another firmware, no display server, little memory...) to MuPDF.
 local function kindle_bridge(state)
-    if not (state.settings and state.settings.kindle_browser) then return nil, "off" end
+    local setting = state.settings and state.settings.kindle_browser
+    if setting == false then return nil, "off" end
     local KB = require("renderers/kindle_browser")
     local Test = require("mdict/kindletest")
     local shim = plugin_dir() .. "/kindle/kindle_shim.so"
@@ -40,7 +43,7 @@ local function kindle_bridge(state)
     if #problems == 0 and avail and avail < KB.MIN_MEMORY then
         problems[1] = string.format("only %d MB of memory is available", math.floor(avail / 1048576))
     end
-    if #problems > 0 then return nil, table.concat(problems, " ") end
+    if #problems > 0 then return nil, table.concat(problems, " "), setting == nil end
     -- the first lookup waits for the browser (14 s on a Paperwhite 4) and its first page
     local UIManager = require("ui/uimanager")
     local _ = require("gettext")
@@ -127,7 +130,7 @@ function Manager.get(state)
     end
     if Manager.failed then return nil end
     if state.settings and state.settings.renderer == "mupdf" then return nil end
-    local ok, bridge, err = pcall(make_bridge, state)
+    local ok, bridge, err, quiet = pcall(make_bridge, state)
     if not ok then bridge, err = nil, bridge end
     if Manager.starting then
         -- closed once the lookup that started the browser is shown
@@ -139,7 +142,7 @@ function Manager.get(state)
         Manager.failed = tostring(err)
         logger.info("MDict: WebView renderer unavailable:", Manager.failed)
         local Device = require("device")
-        if err ~= "off" and Device.isKindle and Device:isKindle() then Manager.notify(Manager.failed) end
+        if err ~= "off" and not quiet and Device.isKindle and Device:isKindle() then Manager.notify(Manager.failed) end
         return nil
     end
     local WebRenderer = require("renderers/webview")
