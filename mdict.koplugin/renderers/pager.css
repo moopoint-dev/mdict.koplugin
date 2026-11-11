@@ -54,14 +54,24 @@ body.mdict-vertical img { max-height: 100%; width: auto; }
   max-height: none !important; max-width: none !important;
 }
 
-/* eInk mode: solid black text, no tinted backgrounds, keep images. */
+/* eInk mode: solid black text, no tinted backgrounds, keep images. pager.js marks the
+   backgrounds (inkBackgrounds): a dark one turns black under white text, an opaque
+   light one white (it still hides what it covered; "paper": inside a black one, with
+   black text again), a see-through one goes. */
 body.mdict-eink #mdict-zoom, body.mdict-eink #mdict-zoom * {
-  color: #000 !important;
-  background-color: transparent !important;
+  color: var(--mdict-ink, #000) !important;
   text-shadow: none !important;
 }
+body.mdict-eink #mdict-zoom [data-mdict-ink="clear"] { background-color: transparent !important; }
+body.mdict-eink #mdict-zoom [data-mdict-ink="light"] { background-color: #fff !important; }
+body.mdict-eink #mdict-zoom [data-mdict-ink="paper"] { background-color: #fff !important; --mdict-ink: #000; }
+body.mdict-eink #mdict-zoom [data-mdict-ink="dark"] { background-color: #000 !important; --mdict-ink: #fff; }
 /* a viewer a script opened over the page (see pager.js) hides the page */
-body.mdict-eink #mdict-zoom [data-mdict-overlay] { background-color: #fff !important; }
+body.mdict-eink #mdict-zoom [data-mdict-overlay] { background-color: #fff !important; --mdict-ink: #000; }
+
+/* the space after an entry's last lines (trailing in pager.js) */
+#mdict-zoom [data-mdict-trim] { margin-block-end: 0 !important; }
+#mdict-zoom [data-mdict-trim="all"] { padding-block-end: 0 !important; }
 
 /* an audio player whose sound KOReader plays, drawn playing (drawPlayer in pager.js) */
 #mdict-player {

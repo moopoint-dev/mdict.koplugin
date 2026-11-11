@@ -404,6 +404,7 @@
   //    page. Such an element is left out of the layout (display: contents), so its
   //    blocks break like any others and its text stays on the lines it was on; not
   //    links, and not elements that draw something of their own.
+  //  - Space after the entry's last lines is dropped (see trailing).
   var CLIP = (window.CSS && CSS.supports && CSS.supports("overflow", "clip")) ? "clip" : "visible";
   var BLOCK_LEVEL = { block: 1, "flow-root": 1, "list-item": 1, table: 1, flex: 1, grid: 1 };
   var RUBY_PARTS = { RT: 1, RP: 1, RB: 1, RTC: 1 };
@@ -434,6 +435,9 @@
       // overflow other than visible made it a block formatting context (contains floats)
       fixes.push([e, fix(ox), fix(oy), cs.display === "block"]);
     }
+    var trim = trailing(zoom, style, unwrap), trimmed = zoom.querySelectorAll("[" + TRIM + "]");
+    for (var q = 0; q < trimmed.length; q++) trimmed[q].removeAttribute(TRIM);
+    for (var r = 0; r < trim.length; r++) trim[r][0].setAttribute(TRIM, trim[r][1]);
     unwrap.forEach(function (u) {
       u.setAttribute(CONTENTS, "");
       u.style.setProperty("display", "contents", "important");
@@ -453,7 +457,9 @@
     if (e.tagName === "A" || e.tagName === "RUBY" || ATOMIC[e.tagName]) return false;
     if (cs.position !== "static" || cs.verticalAlign !== "baseline" || cs.unicodeBidi !== "normal") return false;
     if (cs.writingMode !== parent.writingMode || cs.textCombineUpright && cs.textCombineUpright !== "none") return false;
-    if (cs.textDecorationLine !== "none" || cs.backgroundImage !== "none" || !clear(cs.backgroundColor)) return false;
+    // (e-ink mode draws a light background as the white paper: inkBackgrounds)
+    if (cs.textDecorationLine !== "none" || cs.backgroundImage !== "none"
+        || !clear(cs.backgroundColor) && e.getAttribute(INK) !== "light") return false;
     if (cs.boxShadow !== "none" || cs.outlineStyle !== "none" || cs.opacity !== "1") return false;
     if (cs.transform !== "none" || cs.filter !== "none" || cs.clipPath !== "none") return false;
     if (cs.counterReset !== "none" || cs.counterIncrement !== "none") return false;
@@ -465,7 +471,97 @@
     return true;
   }
 
-  function clear(color) { return color === "transparent" || /,\s*0\)$/.test(color); }
+  // (alpha 0; rgb(0, 0, 0) is black)
+  function clear(color) { return color === "transparent" || /^rgba\([^)]*,\s*0\)$/.test(color); }
+
+  // E-ink mode (pager.css) draws all text black, and the backgrounds marked here black
+  // or white instead of tinted. A dark one turns black under white text: a reversed
+  // label or a heading bar still stands out. Any other opaque one turns white, so it
+  // still hides what it covered (a caption over its box's border); a see-through one
+  // goes. Marked again at each layout, from the entry's own colours, which pager.css
+  // leaves alone on elements without a mark.
+  var INK = "data-mdict-ink";
+  function rgbaOf(color) {
+    var m = /^rgba?\(([^)]*)\)$/.exec(color);
+    var v = m ? m[1].split(/[\s,\/]+/).filter(Boolean).map(parseFloat) : [];
+    return v.length >= 3 ? [v[0], v[1], v[2], v.length > 3 ? v[3] : 1] : null;
+  }
+  // relative luminance (0 black .. 1 white) of a colour drawn over white paper
+  function luminance(c) {
+    var lin = function (v) {
+      v = (c[3] * v + (1 - c[3]) * 255) / 255;
+      return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);
+  }
+  function textLength(root) {
+    var n = 0, walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (var t = walker.nextNode(); t; t = walker.nextNode()) {
+      var p = t.parentNode.nodeName;
+      if (p !== "STYLE" && p !== "SCRIPT" && p !== "TEMPLATE") n += t.data.length;
+    }
+    return n;
+  }
+  function inkBackgrounds(zoom) {
+    var marked = zoom.querySelectorAll("[" + INK + "]");
+    for (var i = 0; i < marked.length; i++) marked[i].removeAttribute(INK);
+    if (!document.body.classList.contains("mdict-eink")) return;
+    // reads every style first: a write in between would make each read compute styles again
+    var all = zoom.getElementsByTagName("*"), marks = [], dark = [], text = -1;
+    for (var j = 0; j < all.length; j++) {
+      var e = all[j], bg = getComputedStyle(e).backgroundColor;
+      if (clear(bg) || e.hasAttribute("data-mdict-overlay")) continue;
+      var c = rgbaOf(bg), mark = "clear";
+      if (c && !ATOMIC[e.tagName]) {
+        if (luminance(c) < 0.4) {
+          // a dark background behind most of the entry is the page's: white paper instead
+          if (text < 0) text = textLength(zoom);
+          mark = textLength(e) * 2 > text ? "light" : "dark";
+        } else if (c[3] >= 1) {
+          mark = "light";
+        }
+      }
+      // (in document order: an element comes after those that hold it)
+      var inDark = false;
+      for (var d = 0; d < dark.length && !inDark; d++) inDark = dark[d].contains(e);
+      if (mark === "dark") dark.push(e);
+      // inside a black one, a white one sets its text black again
+      else if (mark === "light" && inDark) mark = "paper";
+      // white already: nothing to change (marking it would compute what it holds again)
+      else if (mark === "light" && c[0] + c[1] + c[2] >= 765) continue;
+      marks.push(e, mark);
+    }
+    for (var k = 0; k < marks.length; k += 2) marks[k].setAttribute(INK, marks[k + 1]);
+  }
+
+  // An entry can end with space below its last lines, such as the margin of a desktop
+  // window. It only costs a page: when the last lines just fit, the layout moves them to
+  // the next page so that the space after them fits too. Its last boxes lose their end
+  // margin, and their end padding where nothing is drawn around it (pager.css).
+  // Returns them as [element, "margin" or "all"], from styles read before any write.
+  var TRIM = "data-mdict-trim";
+  var FLOW = { block: 1, "flow-root": 1, "list-item": 1 };
+  function trailing(zoom, style, unwrap) {
+    var out = [], axis = state.vertical ? "vertical-rl" : "horizontal-tb";
+    for (var node = zoom; node;) {
+      var e = node.lastChild, cs = null;
+      for (; e; e = e.previousSibling) {
+        if (e.nodeType === 3 && e.data.trim()) return out;
+        if (e.nodeType !== 1) continue;
+        cs = style(e);
+        if (cs.display !== "none" && cs.position !== "absolute" && cs.position !== "fixed") break;
+      }
+      if (!e) return out;
+      // left out of the layout (see fragmentable): what it holds is its parent's
+      if (cs.display === "contents" || unwrap.has(e)) { node = e; continue; }
+      if (!FLOW[cs.display] || cs.float !== "none" || cs.writingMode !== axis) return out;
+      var drawn = parseFloat(cs.getPropertyValue("border-block-end-width")) || !clear(cs.backgroundColor)
+        || cs.backgroundImage !== "none" || cs.boxShadow !== "none" || cs.outlineStyle !== "none";
+      out.push([e, drawn ? "margin" : "all"]);
+      node = drawn ? null : e;
+    }
+    return out;
+  }
 
   // Detects vertical writing from what the entry's own CSS computes for its
   // main content, before the pager's axis is chosen.
@@ -1095,6 +1191,8 @@
   async function settleLayout(opts, t) {
     var zoom = el("mdict-zoom");
     t = t || { mark: function () {} };
+    inkBackgrounds(zoom);
+    t.mark("ink");
     fixFonts(zoom);
     t.mark("families");
     fragmentable(zoom);
@@ -1279,6 +1377,7 @@
       markOverlays(added);
       if (openOverlay()) {
         // the entry under a viewer has not moved: keep its pages
+        inkBackgrounds(el("mdict-zoom"));
         state.page = shownPage;
         present();
         return reply({ handled: true, pages: state.pages, page: state.page, mode: state.mode, ms: t.done() });
