@@ -202,13 +202,23 @@ function Dictionary:_openIndex(f)
     return nil, "indexing"
 end
 
--- The verdict on a shipped index, when it was made for these two files as they are now.
-local function shipped_verdict(path, spec, size, mtime, ksize, kmtime)
+-- The verdict on a shipped index, when it was made for these two files as they are now: their
+-- sizes and mtimes, and, where known, the volume's key count and key-section length and the
+-- index's header CRC. Some file systems (seen on an Android e-reader) keep reporting the old
+-- mtime of a file replaced by another, so the times alone do not show a new copy of either file.
+-- Verdicts written before the extra fields existed match on the times; Dictionary:_openShipped
+-- completes them.
+local function shipped_verdict(path, spec, size, mtime, ksize, kmtime, keys, keys_end, kcrc)
     local v = read_verdict(path)
-    if v and v.spec == spec and v.size == size and v.mtime == mtime and v.koidx_size == ksize
-            and v.koidx_mtime == kmtime then
-        return v
+    if not (v and v.spec == spec and v.size == size and v.mtime == mtime and v.koidx_size == ksize
+            and v.koidx_mtime == kmtime) then
+        return nil
     end
+    if (keys and v.keys and v.keys ~= keys) or (keys_end and v.keys_end and v.keys_end ~= keys_end)
+            or (kcrc and v.koidx_crc and v.koidx_crc ~= kcrc) then
+        return nil
+    end
+    return v
 end
 
 --- The .koidx index shipped beside file `f`, if there is one and it fits the file.
@@ -218,7 +228,10 @@ function Dictionary:_openShipped(f, spec)
     local ksize, kmtime = fs.stat(path)
     if not ksize then return nil end
     local _, _, vpath = self:_paths(f)
-    local v = shipped_verdict(vpath, spec, f.size, f.mtime, ksize, kmtime)
+    local head = Index.readShippedHeader(path)
+    local kcrc = head and head.header_crc32
+    local keys, kend = f.reader.num_entries, Index.keysEnd(f.reader)
+    local v = shipped_verdict(vpath, spec, f.size, f.mtime, ksize, kmtime, keys, kend, kcrc)
     if v and not v.ok then
         f.shipped_problem = v.reason
         return nil
@@ -227,15 +240,22 @@ function Dictionary:_openShipped(f, spec)
         f.shipped_problem = reason
         require("logger").warn("MDict: not using " .. path .. ":", reason)
         Dictionary.writeVerdict(vpath, { spec = spec, size = f.size, mtime = f.mtime, koidx_size = ksize,
-            koidx_mtime = kmtime, ok = false, reason = reason })
+            koidx_mtime = kmtime, keys = keys, keys_end = kend, koidx_crc = kcrc, ok = false, reason = reason })
     end
     local idx, err = Index.openSidecar(path, spec, { format = 2 })
     if not idx then
         reject(err)
         return nil
     end
-    f.shipped = { path = path, size = ksize, mtime = kmtime, verdict = vpath }
-    if v then return idx, "shipped", false end
+    f.shipped = { path = path, size = ksize, mtime = kmtime, verdict = vpath, crc = idx.header.header_crc32 }
+    if v and v.keys and v.keys_end and v.koidx_crc then return idx, "shipped", false end
+    if v and Index.fitsShipped(idx, f.reader) then
+        -- an earlier verdict without the volume's key count, key-section length and the index's
+        -- header CRC: they agree with the index, so the verdict holds and gets them
+        v.keys, v.keys_end, v.koidx_crc = keys, kend, f.shipped.crc
+        Dictionary.writeVerdict(vpath, v)
+        return idx, "shipped", false
+    end
     local ok, why = Index.checkShipped(idx, f.reader)
     if not ok then
         idx:close()
@@ -255,12 +275,14 @@ function Dictionary:_requestVerify(f, spec)
     local job = {
         dict = self, title = self.title, path = f.path, spec = spec, sidecar = sidecar, verdict = verdict_path,
         size = f.size, mtime = f.mtime, keys = f.reader.num_entries, mode = "verify",
-        koidx = sh.path, koidx_size = sh.size, koidx_mtime = sh.mtime, shipped_verdict = shipped_path,
+        keys_end = Index.keysEnd(f.reader), koidx = sh.path, koidx_size = sh.size, koidx_mtime = sh.mtime,
+        koidx_crc = sh.crc, shipped_verdict = shipped_path,
     }
     f.verifying = true
     local function finish(ok)
         f.verifying = false
-        local v = shipped_verdict(shipped_path, spec, job.size, job.mtime, job.koidx_size, job.koidx_mtime)
+        local v = shipped_verdict(shipped_path, spec, job.size, job.mtime, job.koidx_size, job.koidx_mtime,
+            job.keys, job.keys_end, job.koidx_crc)
         if not v then return end -- cancelled: checked again next session
         if v.ok then
             if f.state == "shipped (checking)" then f.state = "shipped" end
@@ -309,7 +331,8 @@ function Dictionary.buildIndexJob(job, progress)
     if job.mode == "verify" then
         local ok, why = Index.verifyShipped(job.koidx, job.path, job.spec, progress)
         Dictionary.writeVerdict(job.shipped_verdict, { spec = job.spec, size = job.size, mtime = job.mtime,
-            koidx_size = job.koidx_size, koidx_mtime = job.koidx_mtime, ok = ok == true, reason = why })
+            koidx_size = job.koidx_size, koidx_mtime = job.koidx_mtime, keys = job.keys, keys_end = job.keys_end,
+            koidx_crc = job.koidx_crc, ok = ok == true, reason = why })
         if ok then return { verified = true } end
         progress = nil
     end

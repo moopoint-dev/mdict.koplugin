@@ -342,7 +342,7 @@ function Index.parseShippedHeader(h)
         max_key = rd32(h, 33), page_size = rd32(h, 37), count = rd32(h, 41), pages = rd32(h, 45),
         pages_off = rd64(h, 49), dir_off = rd64(h, 57), dir_len = rd32(h, 65),
         source_len = rd64(h, 69), source_crc32 = rd32(h, 77), source_size = rd64(h, 81),
-        body_crc32 = rd32(h, 89), builder = (sub(h, 93, 124):gsub("%z+$", "")),
+        body_crc32 = rd32(h, 89), builder = (sub(h, 93, 124):gsub("%z+$", "")), header_crc32 = rd32(h, 125),
     }
     if band(t.flags, bit.bnot(Index.KNOWN_FLAGS)) ~= 0 then
         return nil, string.format("needs a newer plugin (flags %08x)", t.flags)
@@ -354,6 +354,15 @@ function Index.parseShippedHeader(h)
     if t.page_size < 512 or t.page_size > 65536 then return nil, "bad page size " .. t.page_size end
     if t.dir_off ~= t.pages_off + t.pages * t.page_size then return nil, "bad page directory offset" end
     return t
+end
+
+--- Fields of the format 2 header at `path` (128 bytes read), or nil and a reason.
+function Index.readShippedHeader(path)
+    local f = io.open(path, "rb")
+    if not f then return nil, "missing" end
+    local h = f:read(Index.SHIPPED_HEADER)
+    f:close()
+    return Index.parseShippedHeader(h)
 end
 
 --- Opens a sidecar of either format. Returns the index, or nil and a reason (stale, corrupt...).
@@ -520,17 +529,26 @@ end
 local function keys_end(reader)
     return reader.kb_fpos[reader.num_key_blocks]
 end
+Index.keysEnd = keys_end
 
---- Cheap checks that an opened format 2 index belongs to `reader`'s volume: the key count, the
--- length of the header and key section, and `samples` keys spread over the pages, normalised
--- here and compared with the index. Returns true, or nil and a reason.
-function Index.checkShipped(idx, reader, samples)
+--- The checks that cost nothing once the volume is open: does the format 2 index `idx` have the
+-- volume's key count and header-and-key-section length? Returns true, or nil and a reason.
+function Index.fitsShipped(idx, reader)
     local h = idx.header
     if not h then return nil, "not a shipped index" end
     if idx.count ~= reader.num_entries then
         return nil, string.format("built for %d keys, the file has %d", idx.count, reader.num_entries)
     end
     if h.source_len ~= keys_end(reader) then return nil, "built for another file" end
+    return true
+end
+
+--- Cheap checks that an opened format 2 index belongs to `reader`'s volume: Index.fitsShipped,
+-- and `samples` keys spread over the pages, normalised here and compared with the index.
+-- Returns true, or nil and a reason.
+function Index.checkShipped(idx, reader, samples)
+    local fits, why_not = Index.fitsShipped(idx, reader)
+    if not fits then return nil, why_not end
     if idx.pages == 0 then
         return idx.count == 0 or nil, "no pages"
     end

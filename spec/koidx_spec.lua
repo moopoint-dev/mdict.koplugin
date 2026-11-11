@@ -131,6 +131,66 @@ describe("shipped .koidx indexes", function()
         Dictionary.MEMORY_INDEX_MAX = old
     end)
 
+    it("is checked again when either file is replaced but its size and mtime look unchanged", function()
+        local json = require("mdict/json")
+        local old = Dictionary.MEMORY_INDEX_MAX
+        Dictionary.MEMORY_INDEX_MAX = 0
+        local p = shipped("unsorted.mdx")
+        local cache = helper.tmpdir("kcache5")
+        local jobs = {}
+        local builder = function(job, done) jobs[#jobs + 1] = { job, done } end
+        local function session()
+            local d = Dictionary.new({ path = p, cache_dir = cache, builder = builder })
+            d:lookup("Apple")
+            local st = d:indexStates()[1]
+            d:close()
+            return st
+        end
+        local function verdict_path(d)
+            return cache .. "/idx/" .. d.id .. ".mdx.koidx.verdict"
+        end
+        local probe = Dictionary.new({ path = p, cache_dir = cache })
+        local vpath = verdict_path(probe)
+        -- as the file system would report the replaced file: the old size and mtime
+        local function same_times(v)
+            local size, mtime = fs.stat(p)
+            local ksize, kmtime = fs.stat(p .. ".koidx")
+            v.size, v.mtime, v.koidx_size, v.koidx_mtime = size, mtime, ksize, kmtime
+            write(vpath, json.encode(v))
+        end
+        assert.equal("shipped (checking)", session().state)
+        Dictionary.buildIndexJob(jobs[1][1])
+        local good = json.decode(read(vpath))
+        assert.is_true(good.ok)
+        assert.truthy(good.keys and good.keys_end and good.koidx_crc)
+        assert.equal("shipped", session().state)
+        assert.equal(1, #jobs)
+        -- a verdict from 0.4.0 (no key count, key-section length or header CRC) holds, and is completed
+        write(vpath, json.encode({ spec = good.spec, size = good.size, mtime = good.mtime,
+            koidx_size = good.koidx_size, koidx_mtime = good.koidx_mtime, ok = true }))
+        assert.equal("shipped", session().state)
+        assert.equal(good.koidx_crc, json.decode(read(vpath)).koidx_crc)
+        assert.equal(1, #jobs)
+        -- another index under the old name (basic.mdx has as many keys): its header CRC differs
+        local saved = read(p .. ".koidx")
+        local other = shipped("basic.mdx")
+        write(p .. ".koidx", read(other .. ".koidx"))
+        same_times(good)
+        local st = session()
+        assert.is_nil(st.state:find("^shipped"))
+        assert.equal("built for another file", st.shipped_problem)
+        -- another volume under the old name: its key-section length differs
+        write(p .. ".koidx", saved)
+        local mdx = read(p)
+        write(p, read(other))
+        same_times(good)
+        st = session()
+        assert.is_nil(st.state:find("^shipped"))
+        assert.equal("built for another file", st.shipped_problem)
+        write(p, mdx)
+        Dictionary.MEMORY_INDEX_MAX = old
+    end)
+
     it("is not used for another file, which is indexed as before", function()
         local old = Dictionary.MEMORY_INDEX_MAX
         Dictionary.MEMORY_INDEX_MAX = 0
