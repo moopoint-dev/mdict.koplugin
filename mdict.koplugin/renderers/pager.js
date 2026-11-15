@@ -820,12 +820,38 @@
     return chain.then(function () { if (any) fireReady(srcs); });
   }
 
+  function loaded(img) {
+    if (img.complete) return null;
+    return new Promise(function (r) {
+      img.addEventListener("load", r, { once: true });
+      img.addEventListener("error", r, { once: true });
+    });
+  }
+
+  // An image whose width and height its own style sets (a list of thumbnails in boxes)
+  // takes the same room loaded or not.
+  function sized(img) {
+    var s = img.style;
+    return !!(s.width && s.height && s.width !== "auto" && s.height !== "auto");
+  }
+
+  // Waits for the images that can move the layout when they arrive: not those in a hidden
+  // part of the entry or whose box is set (a page waits for those it shows: imagesOnPage).
   function waitForImages(container, ms) {
-    var imgs = Array.prototype.slice.call(container.querySelectorAll("img"));
-    return withTimeout(Promise.all(imgs.map(function (img) {
-      if (img.complete) return null;
-      return new Promise(function (r) { img.onload = img.onerror = function () { r(); }; });
-    })), ms);
+    var imgs = Array.prototype.slice.call(container.querySelectorAll("img")).filter(function (img) {
+      return !img.complete && !sized(img) && img.getClientRects().length > 0;
+    });
+    return withTimeout(Promise.all(imgs.map(loaded)), ms);
+  }
+
+  // Waits for the images drawn on page n that have not arrived (lazy ones start loading
+  // once the page is shown), so the capture has them.
+  function imagesOnPage(n, ms) {
+    var imgs = Array.prototype.slice.call(el("mdict-zoom").querySelectorAll("img")).filter(function (img) {
+      return !img.complete && img.getClientRects().length > 0 && pageOfElement(img) === n;
+    });
+    if (!imgs.length) return Promise.resolve();
+    return withTimeout(Promise.all(imgs.map(loaded)), ms);
   }
 
   // Lets multi-column layout break the entry where a reader would expect.
@@ -1706,7 +1732,8 @@
     state.page = n;
     present();
     // the capture waits until the WebView has drawn this state
-    done(opId, { page: n });
+    imagesOnPage(n, 1500).then(function () { done(opId, { page: n }); },
+                               function (e) { fail(opId, e); });
   };
 
   // A tap that is not on a link: activates expandable sections and the like.
