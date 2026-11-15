@@ -34,6 +34,7 @@
     scripts: false, // a script of an entry ran in this document (its listeners stay)
     overlays: [], // viewers scripts opened over the entry (see markOverlays)
     rectScale: 1, // see scaled()
+    pictured: -1, // the page whose pictures were waited for since the entry was laid out
   };
 
   // CSS pixels left and right of a page of horizontal text (scaled with the entry), where what
@@ -829,29 +830,78 @@
   }
 
   // An image whose width and height its own style sets (a list of thumbnails in boxes)
-  // takes the same room loaded or not.
+  // takes the same room loaded or not. Not a share of the height (in a box whose height is
+  // not set, the picture's own), nor a size left to the picture, a keyword or a variable.
+  var OPEN_SIZE = /auto|content|fill|stretch|intrinsic|inherit|initial|unset|revert|var\(/i;
   function sized(img) {
-    var s = img.style;
-    return !!(s.width && s.height && s.width !== "auto" && s.height !== "auto");
+    var w = img.style.width, h = img.style.height;
+    return !!(w && h) && !OPEN_SIZE.test(w) && !OPEN_SIZE.test(h) && h.indexOf("%") < 0;
+  }
+
+  // Images whose picture did not come. A picture of the dictionary that the WebView asks for
+  // while KOReader is not waiting on it (newer WebViews fetch lazy pictures pages ahead once a
+  // page is drawn) is not extracted in time: the WebView gets nothing after 4 s.
+  var failed = typeof WeakSet === "function" ? new WeakSet() : null;
+  var retried = failed && new WeakSet();
+  if (failed) {
+    document.addEventListener("error", function (e) {
+      if (e.target && e.target.tagName === "IMG") failed.add(e.target);
+    }, true);
+  }
+
+  // Asks once more for a picture that did not come (the page that shows it waits for it).
+  function retry(img) {
+    if (!failed || !failed.has(img) || retried.has(img) || !img.isConnected) return false;
+    failed.delete(img);
+    retried.add(img);
+    if (img.getAttribute("srcset")) img.srcset = img.getAttribute("srcset");
+    if (img.getAttribute("src")) img.src = img.getAttribute("src");
+    return !img.complete;
+  }
+
+  // A lazily loaded image is fetched once the WebView finds it near the viewport: one pages
+  // away, never while the layout waits for it (it was laid out without its picture, and the
+  // pages moved when it came).
+  function fetchNow(img) {
+    if (img.loading === "lazy") img.loading = "eager";
   }
 
   // Waits for the images that can move the layout when they arrive: not those in a hidden
-  // part of the entry or whose box is set (a page waits for those it shows: imagesOnPage).
+  // part of the entry or whose box is set (a page waits for those it shows: picturesShown).
   function waitForImages(container, ms) {
     var imgs = Array.prototype.slice.call(container.querySelectorAll("img")).filter(function (img) {
       return !img.complete && !sized(img) && img.getClientRects().length > 0;
     });
+    if (!imgs.length) return Promise.resolve();
+    imgs.forEach(fetchNow);
     return withTimeout(Promise.all(imgs.map(loaded)), ms);
   }
 
-  // Waits for the images drawn on page n that have not arrived (lazy ones start loading
-  // once the page is shown), so the capture has them.
-  function imagesOnPage(n, ms) {
-    var imgs = Array.prototype.slice.call(el("mdict-zoom").querySelectorAll("img")).filter(function (img) {
-      return !img.complete && img.getClientRects().length > 0 && pageOfElement(img) === n;
+  // Whether a box (an empty one: where it sits) is in v, the part of the viewport the shown
+  // page covers. A picture across a page break is on both pages.
+  function onShownPage(r, v) {
+    var x = r.right > r.left ? r.right > v.left : r.left >= v.left;
+    var y = r.bottom > r.top ? r.bottom > v.top : r.top >= v.top;
+    return x && y && r.left < v.right && r.top < v.bottom;
+  }
+
+  // Waits for the images on the shown page that have not arrived, so the capture has them.
+  function picturesShown(ms) {
+    var v = viewBox();
+    var on = function (r) { return onShownPage(r, v); };
+    var imgs = Array.prototype.filter.call(el("mdict-zoom").querySelectorAll("img"), function (img) {
+      if (img.complete && !(failed && failed.has(img))) return false;
+      if (!Array.prototype.some.call(rectsOf(img), on)) return false;
+      return !img.complete || retry(img);
     });
     if (!imgs.length) return Promise.resolve();
     return withTimeout(Promise.all(imgs.map(loaded)), ms);
+  }
+
+  // Waits for the pictures of the page just shown (the host captures it next).
+  function shownWithPictures(ms) {
+    var n = state.page;
+    return picturesShown(ms).then(function () { if (state.page === n) state.pictured = n; });
   }
 
   // Lets multi-column layout break the entry where a reader would expect.
@@ -1278,6 +1328,7 @@
   // Lays the entry out in the requested pagination mode ("auto" tries columns first).
   function layout(mode) {
     state.page = 0;
+    state.pictured = -1;
     state.mode = "columns";
     state.slices = null;
     document.body.classList.remove("mdict-slices");
@@ -1727,13 +1778,18 @@
   };
 
   MDict.showPage = function (opId) {
-    var n = arg(opId).page | 0;
-    n = Math.max(0, Math.min(state.pages - 1, n));
-    state.page = n;
-    present();
-    // the capture waits until the WebView has drawn this state
-    imagesOnPage(n, 1500).then(function () { done(opId, { page: n }); },
-                               function (e) { fail(opId, e); });
+    try {
+      var n = arg(opId).page | 0;
+      n = Math.max(0, Math.min(state.pages - 1, n));
+      // (shown again to read its links: its pictures were waited for)
+      var again = n === state.page && state.pictured === n;
+      state.page = n;
+      present();
+      // the capture waits until the WebView has drawn this state, and for the pictures on it
+      (again ? Promise.resolve() : shownWithPictures(1500)).then(function () {
+        done(opId, { page: n });
+      }, function (e) { fail(opId, e); });
+    } catch (e) { fail(opId, e); }
   };
 
   // A tap that is not on a link: activates expandable sections and the like.
@@ -1841,6 +1897,7 @@
         inkBackgrounds(el("mdict-zoom"));
         state.page = shownPage;
         present();
+        await shownWithPictures(1000);
         return reply({ handled: true, pages: state.pages, page: state.page, mode: state.mode, ms: t.done() });
       }
       await settleLayout({ imageTimeout: 1000 }, t);
@@ -1850,6 +1907,9 @@
       state.page = Math.max(0, Math.min(state.pages - 1, p >= 0 ? p : shownPage));
       present();
       t.mark("page");
+      // the host captures this page without showing it again (showPage)
+      await shownWithPictures(1000);
+      t.mark("pictures");
       var res = { handled: true, pages: state.pages, page: state.page, mode: state.mode, ms: t.done() };
       if (path) res.path = path;
       reply(res);
